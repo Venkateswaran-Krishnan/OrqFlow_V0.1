@@ -1,0 +1,26 @@
+{
+  "execution_config": {
+    "retry_limit": 1,
+    "batch_enabled": true,
+    "batch_limit": 1,
+    "wait_enabled": false,
+    "wait_limit": 0,
+    "wait_seconds": 0
+  },
+  "logging_config": {
+    "level": "INFO",
+    "log_file": "../logs/orqflow.log",
+    "console": true,
+    "max_bytes": 1000000,
+    "backup_count": 5
+  },
+  "process_config": {
+    "app": "demo",
+    "object_repo_path": "object_repo",
+    "init_module": "init_module.py",
+    "process_module": "process_module.py",
+    "automation_steps": "automation_steps.csv",
+    "queue_creation_enabled": false,
+    "settings": {}
+  }
+}
