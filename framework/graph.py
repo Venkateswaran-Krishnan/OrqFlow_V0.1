@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from framework.config import load_initial_state
+from framework.config import DEFAULT_BOOTSTRAP_PATH, load_initial_state
 from framework.logging_config import configure_logging, get_logger, shutdown_logging
 from framework.nodes import (
     end,
@@ -14,6 +15,7 @@ from framework.nodes import (
     get_transaction,
     master_queue_creator,
     process_transaction,
+    route_after_execution_init,
     route_after_get,
     route_after_transition,
     transition_hub,
@@ -34,7 +36,14 @@ def build_graph():
 
     graph.set_entry_point("framework_init")
     graph.add_edge("framework_init", "execution_init")
-    graph.add_edge("execution_init", "master_queue_creator")
+    graph.add_conditional_edges(
+        "execution_init",
+        route_after_execution_init,
+        {
+            "master_queue_creator": "master_queue_creator",
+            "get_transaction": "get_transaction",
+        },
+    )
     graph.add_edge("master_queue_creator", "get_transaction")
     graph.add_conditional_edges(
         "get_transaction",
@@ -60,12 +69,15 @@ def build_graph():
     return graph.compile()
 
 
-def run_graph(config_path: str | Path) -> dict[str, Any]:
+def run_graph(config_path: str | Path = DEFAULT_BOOTSTRAP_PATH) -> dict[str, Any]:
     app = build_graph()
-    state = load_initial_state(config_path)
-    configure_logging(state.get("logging_config"))
+    configure_logging()
     logger = get_logger("graph")
     try:
+        state = load_initial_state(config_path)
+        configure_logging(state.get("config", {}).get("logging_config"))
+        logger = get_logger("graph")
+        _log_effective_config(state)
         logger.debug("Initial state: %s", state)
         return app.invoke(state)
     except Exception:
@@ -73,3 +85,11 @@ def run_graph(config_path: str | Path) -> dict[str, Any]:
         raise
     finally:
         shutdown_logging()
+
+
+def _log_effective_config(state: dict[str, Any]) -> None:
+    logger = get_logger("config")
+    logger.info(
+        "Effective config: %s",
+        json.dumps(state.get("config", {}), indent=2, sort_keys=True, default=str),
+    )

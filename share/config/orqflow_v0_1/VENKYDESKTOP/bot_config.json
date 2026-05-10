@@ -1,0 +1,12 @@
+{
+  "process_config": {
+    "settings": {
+      "bot": "VENKYDESKTOP",
+	  "masterbot": false
+		}
+	},
+  "logging_config": {
+    "level": "DEBUG"
+  }
+
+}

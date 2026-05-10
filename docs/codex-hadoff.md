@@ -3,6 +3,204 @@
 Date: 2026-05-08
 Workspace: `C:\Users\TestBot4\Documents\Orqflow\OrqflowV0.1`
 
+## Working Agreement
+
+- This document is the cross-machine project memory for Codex sessions.
+- Important discussions, decisions, assumptions, open questions, implementation notes, and sync status should be added here before ending a session.
+- The repository is expected to be synced through the Git remote so work can continue from another PC at any time.
+- Keep this handoff updated whenever architecture direction changes or source-code behavior is modified.
+
+## 2026-05-10 Cleanup Restart Point
+
+The project was intentionally cleaned back to the graph/config foundation so the runtime/app design can restart cleanly.
+
+Kept:
+
+- Graph/config/runtime foundation: `framework/graph.py`, `framework/nodes.py`, `framework/config.py`, `framework/cli.py`, `framework/state.py`, `framework/results.py`, `framework/logging_config.py`, package entrypoints, `bootstrap.json`, and `pyproject.toml`.
+- Graph support services: framework lifecycle, queue runtime, transition runtime, cleanup runtime, and service package marker.
+- Project memory: this handoff document.
+
+Removed:
+
+- Demo/application artifacts: `apps/`, `examples/`.
+- Legacy CSV runner: `framework/steps.py`.
+- Experimental module runtime layer: `framework/runtime_loader.py`, `framework/services/module_runtime.py`, `framework/services/execution_lifecycle.py`, `framework/services/transaction_runtime.py`, `framework/services/runtime_state.py`.
+- Current tests/fixtures tied to the discarded design: `tests/`.
+- Generated/runtime artifacts: `__pycache__/`, `*.pyc`, and `logs/orqflow.log`.
+
+Follow-up code adjustments:
+
+- `framework/nodes.py` no longer imports removed execution/transaction services.
+- `execution_init` is currently a no-op graph node.
+- `process_transaction` is currently a temporary success stub so graph construction remains coherent while the runtime design is rebuilt.
+- `framework/services/transition_runtime.py` now owns its small transition helper functions directly.
+- `framework/config.py` was simplified to load/merge config without resolving app module paths.
+- `pyproject.toml` package discovery is back to `include = ["framework*"]`.
+
+Verification:
+
+```powershell
+python -B -c "from framework.graph import build_graph; build_graph(); print('graph ok')"
+```
+
+Result:
+
+- Graph imports and builds successfully.
+
+## 2026-05-10 Runtime Package Cleanup
+
+Decision:
+
+- Remove the `framework/adapters.py` placeholder module.
+- Rename the internal engine package from `framework/services` to `framework/runtime`.
+- Adapters will be recreated later only if the new design needs explicit adapter boundaries.
+
+Changes made:
+
+- Moved kept runtime files into `framework/runtime/`.
+- Updated `framework/nodes.py` imports from `framework.services.*` to `framework.runtime.*`.
+- Moved the temporary `InMemoryQueue` placeholder into `framework/runtime/queue_runtime.py`.
+- Removed unused placeholder concepts `BrowserDriver` and `ObjectRepository` with `framework/adapters.py`.
+- Updated runtime logger namespaces from `framework.services.*` to `framework.runtime.*`.
+
+Current kept runtime package:
+
+```text
+framework/runtime/
+    __init__.py
+    cleanup_runtime.py
+    framework_lifecycle.py
+    queue_runtime.py
+    transition_runtime.py
+```
+
+Verification:
+
+```powershell
+python -B -c "from framework.graph import build_graph; build_graph(); print('graph ok')"
+```
+
+Result:
+
+- Graph imports and builds successfully.
+
+## 2026-05-10 Single Merged Config Object
+
+Decision:
+
+- The framework reads three physical config files in order:
+  1. `global_config.json`
+  2. `project_config.json`
+  3. `<machine>/bot_config.json`
+- Project config appends or overwrites global config values.
+- Bot config appends or overwrites both global and project config values.
+- The final merged result is the framework config object.
+
+Change made:
+
+- `load_initial_state(...)` now returns the merged config under `state["config"]`.
+- Split top-level state keys `execution_config`, `process_config`, and `logging_config` were removed from `OrqflowState`.
+- Runtime code now reads execution settings through `state["config"]["execution_config"]`.
+- Graph logging setup now reads logging settings through `state["config"]["logging_config"]`.
+- Effective config logging now logs one merged config object instead of separate config sections.
+
+Current state shape:
+
+```python
+{
+    "config": {...},
+    "runtime_config": {...},
+    "logs": [],
+}
+```
+
+Verification:
+
+```powershell
+python -B -c "from framework.config import load_initial_state; s=load_initial_state(); print(sorted(s.keys())); print(sorted(s['config'].keys()))"
+python -B -c "from framework.graph import build_graph; build_graph(); print('graph ok')"
+```
+
+Result:
+
+- Initial state keys are `config`, `logs`, and `runtime_config`.
+- Merged config currently contains `execution_config`, `logging_config`, and `process_config`.
+- Graph imports and builds successfully.
+
+## 2026-05-10 Machine-Specific Timestamped Logs
+
+Decision:
+
+- Each bot machine gets its own log folder.
+- Relative `logging_config.log_file` paths are resolved from the bot machine config folder.
+- When `timestamp_file` is true, the configured filename receives a run timestamp.
+- The log folder is created if missing.
+
+Example:
+
+```text
+<share_root>\config\<project>\<machine>\logs\orqflow_YYYYMMDD_HHMMSS.log
+```
+
+Current verified path:
+
+```text
+D:\share\config\orqflow_v0_1\VENKYDESKTOP\logs\orqflow_20260510_195618.log
+```
+
+Verification:
+
+```powershell
+python -m framework
+python -B -c "from framework.graph import build_graph; build_graph(); print('graph ok')"
+```
+
+Result:
+
+- Framework run completed successfully.
+- Timestamped machine-specific log file was created.
+- Graph imports and builds successfully.
+
+## 2026-05-10 Master Bot Routing
+
+Decision:
+
+- `master_queue_creator` should run only when merged config has:
+
+```json
+{
+  "process_config": {
+    "settings": {
+      "masterbot": true
+    }
+  }
+}
+```
+
+Change made:
+
+- Added `route_after_execution_init(...)` in `framework/nodes.py`.
+- Replaced the fixed graph edge `execution_init -> master_queue_creator` with conditional routing in `framework/graph.py`.
+
+Current routing:
+
+```text
+execution_init -> master_queue_creator -> get_transaction   if masterbot is true
+execution_init -> get_transaction                           otherwise
+```
+
+Verification:
+
+```powershell
+python -B -c "from framework.graph import build_graph; build_graph(); print('graph ok')"
+python -m framework
+```
+
+Result:
+
+- Graph imports and builds successfully.
+- With current config containing `masterbot: true`, the run logs include `NODE:MASTER_QUEUE_CREATOR`.
+
 ## Session Summary
 
 This session was architectural analysis only until this handoff file was added.
@@ -13,6 +211,411 @@ We reviewed Python package concepts in the current repo and then focused on a de
 - The desired design is module-driven, where automation logic lives inside app-specific runtime modules such as login/init/process modules.
 - Reusable logic should be shared by application, with each app owning its own shared object repository and app-specific helpers.
 - `framework/services` should remain the framework's internal engine layer, not the location for business automation logic.
+
+## 2026-05-10 Update
+
+The first source-code refactor toward module-driven execution has been applied.
+
+Changes made:
+
+- Added `framework/services/module_runtime.py`.
+- `framework/services/execution_lifecycle.py` now calls `run_init(state)` from the loaded init module.
+- `framework/services/transaction_runtime.py` now calls `run_process(state)` from the loaded process module.
+- `framework/config.py` no longer requires `automation_steps`; it only resolves that path if present for legacy compatibility.
+- `framework/state.py` no longer includes `automation_steps` as part of the core runtime state shape.
+- `examples/init_module.py` now defines `run_init(state)` and owns its init sequence.
+- `examples/process_module.py` now defines `run_process(state)` and owns its process sequence.
+- `examples/config.json` no longer points to `automation_steps.csv`.
+- Added a first concrete app-grouped demo layout under `apps/demo`.
+- `examples/config.json` now points to `../apps/demo/automations/case_processing/init.py` and `../apps/demo/automations/case_processing/process.py`.
+- Shared demo actions now live in `apps/demo/shared/actions.py`.
+- Added `apps*` to the setuptools package include list in `pyproject.toml`.
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Result:
+
+- 1 test ran successfully.
+- The demo graph marks the example transaction as `SUCCESS`.
+- Logs confirm direct function execution through the module-owned init/process flows.
+
+Current behavior after this update:
+
+- Core execution no longer loads CSV automation steps.
+- Core execution no longer calls `run_phase_steps(...)`.
+- The active demo automation now lives under `apps/demo/automations/case_processing`.
+- App-specific reusable demo functions now live under `apps/demo/shared`.
+- `framework/steps.py` and `examples/automation_steps.csv` still exist as legacy/declarative artifacts but are no longer used by the example config or primary runtime path.
+
+## 2026-05-10 Config Layering Update
+
+A new `share/` folder was added to model the real shared location that will exist in production.
+
+Config layout created:
+
+```text
+share/
+    config/
+        global_config.json
+        orqflow_v0_1/
+            project_config.json
+            VENKYDESKTOP/
+                bot_config.json
+```
+
+Intended config precedence:
+
+1. `share/config/global_config.json`
+2. `share/config/<project>/project_config.json`
+3. `share/config/<project>/<machine_name>/bot_config.json`
+
+Machine name resolution:
+
+- The framework first reads `COMPUTERNAME`.
+- If unavailable, it reads `HOSTNAME`.
+- If unavailable, it falls back to `platform.node()`.
+- The resolved machine name is used as the bot folder name under the project config folder.
+
+Merge behavior:
+
+- Later config layers supersede earlier layers.
+- Nested dictionaries merge recursively.
+- `null`, empty string, empty list, and empty object values are ignored and do not overwrite existing values.
+- If the bot folder or bot config file does not exist, that layer is skipped.
+
+Source changes for config layering:
+
+- `framework/config.py` now supports both a single JSON config file and a project config directory.
+- `load_initial_state(...)` now calls `load_config(...)` and resolves runtime paths relative to the project config directory for layered config.
+- `framework/cli.py` now describes the argument as either a JSON config file or project config directory.
+- `tests/test_config_loading.py` was added to verify global/project/bot layering and empty-value ignore behavior.
+- `tests/test_langgraph_flow.py` now runs the graph using `share/config/orqflow_v0_1`.
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+python -m framework share\config\orqflow_v0_1
+```
+
+Result:
+
+- 3 tests ran successfully.
+- The framework ran end-to-end from the layered share config directory.
+
+## 2026-05-10 Sequence Logging Test
+
+Ran the framework from the layered config path:
+
+```powershell
+python -m framework share\config\orqflow_v0_1
+```
+
+Observed execution sequence:
+
+```text
+NODE:FRAMEWORK_INIT
+NODE:EXECUTION_INIT
+INIT_FUNC:login
+INIT_FUNC:prepare_session
+NODE:MASTER_QUEUE_CREATOR
+NODE:GET_TRANSACTION
+NODE:PROCESS_TRANSACTION
+PROCESS_FUNC:open_case:demo-1
+PROCESS_FUNC:validate_data
+PROCESS_FUNC:submit_transaction
+NODE:TRANSITION_HUB:SUCCESS
+NODE:END
+```
+
+Added an automated regression test:
+
+- `tests/test_langgraph_flow.py::LangGraphFlowTests.test_demo_graph_logs_expected_execution_sequence`
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Result:
+
+- 4 tests ran successfully.
+
+## 2026-05-10 Bootstrap Config Decision
+
+Decision:
+
+- Use a root-level `bootstrap.json` as the first config file known to the framework.
+- Do not store the shared location in `pyproject.toml`.
+- `bootstrap.json` lives in the project root and points to the shared root plus project name.
+
+Created:
+
+```json
+{
+  "share_root": "share",
+  "project": "orqflow_v0_1"
+}
+```
+
+Runtime startup now supports:
+
+```powershell
+python -m framework
+```
+
+Default behavior:
+
+1. Read `bootstrap.json` from the current project root.
+2. Resolve `share_root` relative to the bootstrap file if it is a relative path.
+3. Build the project config directory as `<share_root>/config/<project>`.
+4. Merge global -> project -> machine bot config.
+5. Start the graph.
+
+Source changes:
+
+- `framework/config.py` added `DEFAULT_BOOTSTRAP_PATH = "bootstrap.json"`.
+- `load_initial_state(...)`, `load_config(...)`, and `run_graph(...)` now default to the bootstrap path.
+- `framework/cli.py` now makes the config argument optional.
+- `tests/test_config_loading.py` verifies bootstrap loading.
+- `tests/test_langgraph_flow.py` now calls `run_graph()` with no explicit config path.
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+python -m framework
+```
+
+Result:
+
+- 5 tests ran successfully.
+- `python -m framework` ran end-to-end using `bootstrap.json`.
+
+## 2026-05-10 Startup Logging Fix
+
+Issue observed:
+
+- `logs/orqflow.log` was empty when running the framework.
+- Root `bootstrap.json` had been changed to:
+
+```json
+{
+  "share_root": "d://share",
+  "project": "orqflow_v0_1"
+}
+```
+
+Cause:
+
+- The framework tried to load `d:\share\config\orqflow_v0_1`.
+- That folder did not exist in the current environment.
+- Config loading happened before logging was configured, so startup/config failures did not reach `logs/orqflow.log`.
+
+Fix applied:
+
+- `framework/graph.py` now configures default local logging before loading config.
+- If bootstrap/shared-config loading fails, the exception is now written to `logs/orqflow.log`.
+- Tests no longer depend on the real root `bootstrap.json`; they use `tests/fixtures/bootstrap.json` and `tests/fixtures/share/...`.
+- `framework/config.py` bootstrap detection was hardened so it does not try to parse missing non-directory paths as JSON.
+
+Current behavior:
+
+- If `bootstrap.json` points to a missing shared location, `python -m framework` still fails, correctly, but the error is now logged.
+- To run successfully with `share_root = "d://share"`, the shared config files must exist under `d:\share\config\orqflow_v0_1`.
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Result:
+
+- 5 tests ran successfully.
+
+## 2026-05-10 Shared Config Path Resolution Note
+
+Issue observed after moving `share_root` to `D:/share`:
+
+```text
+FileNotFoundError: Runtime module not found: D:\apps\demo\automations\case_processing\init.py
+```
+
+Cause:
+
+- `D:\share\config\orqflow_v0_1\project_config.json` contains paths such as:
+
+```json
+"init_module": "../../../apps/demo/automations/case_processing/init.py"
+```
+
+- Runtime paths are currently resolved relative to the project config directory.
+- With shared config at `D:\share\config\orqflow_v0_1`, `../../../apps/...` resolves to `D:\apps\...`.
+- The actual repo apps folder is under `D:\Document\PyProject\Playwright\OrqFlow_V0.1\apps`.
+
+Design implication:
+
+- Once config lives in a real shared location, paths to repo-owned code should not rely on fragile relative paths from the shared drive unless the shared drive intentionally mirrors the repo layout.
+- Candidate solutions:
+  - Use absolute paths in project config for `init_module`, `process_module`, and `object_repo_path`.
+  - Add a bootstrap-level `project_root` / `code_root` and resolve app module paths relative to that.
+  - Change config format to reference app/automation names, then have the framework resolve them relative to the installed project/package.
+
+## 2026-05-10 Effective Config Logging
+
+Request:
+
+- After completing config loading, log all effective config keys and values.
+
+Change made:
+
+- `framework/graph.py` now logs the effective merged config after `load_initial_state(...)` and after configured logging is active.
+- Logged sections:
+  - `execution_config`
+  - `process_config`
+  - `logging_config`
+- Values are logged as sorted, indented JSON through `framework.config`.
+
+Example log prefix:
+
+```text
+framework.config | Effective execution_config: { ... }
+framework.config | Effective process_config: { ... }
+framework.config | Effective logging_config: { ... }
+```
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Result:
+
+- 5 tests ran successfully.
+
+## 2026-05-10 Shared Config Root Convention
+
+Decision:
+
+- The `config` folder inside the shared location is constant.
+- If `bootstrap.json` has `"share_root": "D:/share"`, the fixed config root is:
+
+```text
+D:\share\config
+```
+
+- The default shared app root is now inferred as:
+
+```text
+D:\share\config\apps
+```
+
+Config behavior:
+
+- `app_root` remains supported as an override.
+- If `process_config.app_root` is not configured, the framework uses `<share_root>\config\apps`.
+- Runtime paths such as `init_module`, `process_module`, and `object_repo_path` are resolved relative to the app root.
+- The app root is added to `sys.path` so app modules can import sibling app packages such as `from demo.shared import actions`.
+
+Recommended shared config shape:
+
+```text
+D:\share
+    config
+        global_config.json
+        apps
+            demo
+                automations
+                    case_processing
+                        init.py
+                        process.py
+                shared
+                    actions.py
+                    object_repo
+        orqflow_v0_1
+            project_config.json
+            VENKYDESKTOP
+                bot_config.json
+```
+
+Recommended `project_config.json` paths:
+
+```json
+{
+  "process_config": {
+    "app": "demo",
+    "object_repo_path": "demo/shared/object_repo",
+    "init_module": "demo/automations/case_processing/init.py",
+    "process_module": "demo/automations/case_processing/process.py"
+  }
+}
+```
+
+Important:
+
+- Do not use old paths like `../../../apps/demo/...` when apps live under `D:\share\config\apps`.
+- Those old paths can resolve outside the intended shared config folder.
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Result:
+
+- 6 tests ran successfully.
+
+## 2026-05-10 App Root From Project Config
+
+Decision refinement:
+
+- The project folder still comes from `bootstrap.json` via the `project` key.
+- The apps location should be configured inside the project config.
+- The framework supports `<share_root>` as a token in config paths.
+
+Recommended project config:
+
+```json
+{
+  "process_config": {
+    "app": "demo",
+    "app_root": "<share_root>/config/apps",
+    "object_repo_path": "demo/shared/object_repo",
+    "init_module": "demo/automations/case_processing/init.py",
+    "process_module": "demo/automations/case_processing/process.py"
+  }
+}
+```
+
+Resolution behavior:
+
+- `<share_root>` is expanded from `bootstrap.json`.
+- `app_root` is resolved first.
+- `init_module`, `process_module`, and `object_repo_path` are then resolved relative to `app_root`.
+- `app_root` is added to `sys.path` so app modules can import sibling shared packages, for example `from demo.shared import actions`.
+
+Compatibility:
+
+- If `app_root` is not configured, the framework currently falls back to `<share_root>/config/apps`.
+- The preferred explicit style is to put `app_root` in `project_config.json`.
+
+Verification:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Result:
+
+- 7 tests ran successfully.
 
 ## Decisions Reached
 
@@ -159,6 +762,7 @@ This reinforces that step-level control flow is not truly owned by the CSV schem
 - `framework/__init__.py`
 - `framework/__main__.py`
 - `framework/cli.py`
+- `framework/config.py`
 - `framework/graph.py`
 - `framework/nodes.py`
 - `framework/results.py`
@@ -175,6 +779,9 @@ Directories inspected:
 - repository root
 - `framework/`
 - `framework/services/`
+- `examples/`
+- `apps/demo/`
+- `share/config/`
 
 ## Commands Run
 
@@ -213,42 +820,76 @@ Created:
 
 - `docs/codex-hadoff.md`
 
-No source-code behavior was changed in this session.
+Added:
+
+- `framework/services/module_runtime.py`
+- `apps/__init__.py`
+- `apps/demo/__init__.py`
+- `apps/demo/automations/__init__.py`
+- `apps/demo/automations/case_processing/__init__.py`
+- `apps/demo/automations/case_processing/init.py`
+- `apps/demo/automations/case_processing/process.py`
+- `apps/demo/shared/__init__.py`
+- `apps/demo/shared/actions.py`
+- `apps/demo/shared/object_repo/.gitkeep`
+
+Modified:
+
+- `framework/services/execution_lifecycle.py`
+- `framework/services/transaction_runtime.py`
+- `framework/config.py`
+- `framework/state.py`
+- `examples/config.json`
+- `examples/init_module.py`
+- `examples/process_module.py`
+- `pyproject.toml`
+- `docs/codex-hadoff.md`
+- `framework/cli.py`
+- `tests/test_langgraph_flow.py`
+
+Added for config layering:
+
+- `bootstrap.json`
+- `share/config/global_config.json`
+- `share/config/orqflow_v0_1/project_config.json`
+- `share/config/orqflow_v0_1/VENKYDESKTOP/bot_config.json`
+- `tests/test_config_loading.py`
+- `tests/fixtures/config/global_config.json`
+- `tests/fixtures/config/demo_project/project_config.json`
+- `tests/fixtures/config/demo_project/TESTBOT/bot_config.json`
 
 ## Current Project State
 
-As of this handoff:
+As of the 2026-05-10 update:
 
-- The repo still uses the existing CSV-step architecture.
-- No refactor has been applied yet.
-- The framework still initializes execution by loading automation steps from config and calling `run_phase_steps(...)`.
-- The user has clarified that this is not the desired end-state architecture.
+- The runtime now follows the first version of the desired module-driven architecture.
+- Init flow is owned by the configured init module through `run_init(state)`.
+- Process flow is owned by the configured process module through `run_process(state)`.
+- The example config points to app-owned runtime modules under `apps/demo/automations/case_processing`.
+- App-specific reusable code is demonstrated under `apps/demo/shared`.
+- The primary tested config path is now `share/config/orqflow_v0_1`.
+- Config is layered as global -> project -> machine bot config.
+- The graph, transition hub, queue runtime, retry handling, and cleanup behavior remain framework-owned.
+- CSV step execution remains in the repository only as legacy code pending a deletion/optional-mode decision.
 
 ## Unresolved Tasks
 
-1. Refactor the framework away from CSV-driven `steps.py` orchestration.
-2. Define the concrete package structure for app-grouped automations and app-grouped shared code.
-3. Change execution lifecycle to call module entry points such as `run_init()` and `run_process()` directly.
-4. Decide whether `steps.py` will be deleted or retained as an optional legacy/declarative mode.
-5. Decide where object repositories will live and how they will be loaded per app.
-6. Separate app-specific reusable helpers from cross-app reusable helpers.
-7. Review config format to remove or replace the current `automation_steps` dependency.
+1. Decide whether `framework/steps.py` and `examples/automation_steps.csv` should be deleted or retained as an optional legacy/declarative mode.
+2. Decide whether the first concrete package structure under `apps/demo` should become the official convention.
+3. Decide where object repositories will live and how they will be loaded per app.
+4. Separate app-specific reusable helpers from cross-app reusable helpers.
+5. Decide whether project selection should be provided as a path, a project name, or both.
+6. Decide whether bot config files should always be named `bot_config.json` or support multiple named config files inside each bot folder.
+7. Add focused tests for direct init execution, direct process execution, retry behavior, app switch behavior, and queue transition behavior.
 
 ## Suggested Next Steps
 
-1. Create a target package layout for `apps/<app>/shared` and `apps/<app>/automations`.
-2. Refactor `framework/services/execution_lifecycle.py` to stop loading CSV steps for init flow.
-3. Refactor `framework/services/transaction_runtime.py` to stop using phase-based generic step execution for process flow.
-4. Introduce explicit module contracts such as:
-
-```python
-def run_init(state): ...
-def run_process(state): ...
-```
-
-5. Update config so it points to module entry points instead of CSV step files.
-6. Remove or isolate `framework/steps.py` after the direct-module flow is working.
-7. Add tests for:
+1. Decide whether config should reference module file paths directly or reference app/automation names that the framework resolves.
+2. Add tests around the app-grouped module layout.
+3. Decide whether old `examples/init_module.py` and `examples/process_module.py` should remain as legacy examples or be removed with the CSV runner.
+4. Decide how production will pass the project config path, for example `python -m framework share\config\orqflow_v0_1`.
+4. Remove or isolate `framework/steps.py` after the direct-module flow is accepted.
+5. Add tests for:
 
 - direct init execution
 - direct process execution
@@ -262,4 +903,21 @@ def run_process(state): ...
 - Automation logic should be authored in Python modules, not primarily in CSV.
 - Reusable code is expected to be shared across automations within the same app.
 - Object repositories are app-specific and should live alongside app-shared code.
+
+## 2026-05-10 Runtime Queue Decision
+
+- Queue initialization was moved out of `framework_init`.
+- `runtime_config.first_run` now starts as `true` and means the first transaction cycle is active.
+- `runtime_config.queue_initialized` now starts as `false` and prevents repeated queue setup.
+- `get_transaction` initializes the current placeholder `InMemoryQueue` once, then reuses it.
+- `process_transaction` marks `first_run` as `false` after the first process transaction completes.
+- Logs were added for framework lifecycle startup, queue initialization/reuse, and first-run completion.
+- Excel queue loading is still pending and should plug into the same `get_transaction` first-initialization point.
+
+## 2026-05-10 Repository Share Folder
+
+- The external `D:\share` content was copied into repo-local `share/` so config and test artifacts can sync through Git.
+- Copied shared config, demo app files, bot config, and `Input01.xlsx`.
+- Excluded generated files and runtime output: `__pycache__`, `*.pyc`, and machine log folders.
+- `bootstrap.json` still points to `d:/share`; switching it to repo-local `share` is a separate runtime-location decision.
 

@@ -2,8 +2,11 @@
 
 ## Root Files
 
+`bootstrap.json`  
+Bootstrap input for the framework. Provides the shared root and project name used by config loading.
+
 `pyproject.toml`  
-Project/package metadata. Defines dependencies and CLI entry point.
+Project/package metadata. Defines dependencies, package discovery, and the CLI entry point.
 
 `Orqflow_Requirement.md`  
 Main architecture and behavior requirement document.
@@ -11,13 +14,16 @@ Main architecture and behavior requirement document.
 `Orqflow_Requirement_Review.md`  
 Review notes, open gaps, risks, and production-hardening questions.
 
+`docs/codex-hadoff.md`  
+Cross-machine project memory for decisions, cleanup notes, and current direction.
+
 ## Framework Entry
 
 `framework/__main__.py`  
-Runs when calling `python -m framework examples\config.json`. Forwards execution to `cli.py`.
+Runs when calling `python -m framework`. Forwards execution to `framework.cli.main()`.
 
 `framework/cli.py`  
-Reads command-line arguments and calls `run_graph(config_path)`.
+Reads the optional config/bootstrap path argument and calls `run_graph(...)`.
 
 `framework/__init__.py`  
 Package exports. Makes `build_graph` and `run_graph` importable from `framework`.
@@ -25,72 +31,50 @@ Package exports. Makes `build_graph` and `run_graph` importable from `framework`
 ## Graph And State
 
 `framework/graph.py`  
-Builds the LangGraph workflow. Defines nodes, edges, and conditional routing.
+Builds the LangGraph workflow, configures logging, loads initial state, and invokes the graph.
 
 `framework/nodes.py`  
-Thin LangGraph node wrappers. Each node logs entry and delegates real work to a service.
+Thin LangGraph node wrappers. Logs node entry and delegates runtime behavior.
 
 `framework/state.py`  
 Typed shape of the shared state dictionary passed through the graph.
 
-## Core Runtime
+## Config And Contracts
 
 `framework/config.py`  
-Loads `examples/config.json`, resolves paths, and creates the initial state.
-
-`framework/runtime_loader.py`  
-Dynamically imports runtime Python files like `init_module.py` and `process_module.py`.
-
-`framework/steps.py`  
-Loads `automation_steps.csv`, filters steps by phase, calls mapped functions, and normalizes results.
+Loads bootstrap/project config, merges global/project/bot layers, and creates initial graph state.
 
 `framework/results.py`  
-Defines outcomes like `SUCCESS`, `BUSINESS_EXCEPTION`, `SYSTEM_EXCEPTION`, and `StepResult`.
-
-`framework/adapters.py`  
-Placeholder adapters for browser driver, object repository, and in-memory queue.
+Defines runtime outcomes and the standard result shape used by graph transitions.
 
 `framework/logging_config.py`  
-Configures logging: level, console output, rotating file logs, and trace events.
+Configures logging, rotating file logs, console output, and trace events.
 
-## Services
+## Runtime
 
-`framework/services/framework_lifecycle.py`  
-Framework startup behavior. Currently initializes the queue.
+`framework/runtime/framework_lifecycle.py`  
+Framework startup behavior. Currently initializes the in-memory queue.
 
-`framework/services/execution_lifecycle.py`  
-Execution setup: loads init module, automation steps, repo, driver, and runs init steps.
+`framework/runtime/queue_runtime.py`  
+Queue behavior: in-memory queue placeholder, fetch next transaction, wait handling, and batch count.
 
-`framework/services/queue_runtime.py`  
-Queue behavior: create queue placeholder, fetch next transaction, wait handling, and batch count.
+`framework/runtime/transition_runtime.py`  
+Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end.
 
-`framework/services/transaction_runtime.py`  
-Transaction execution: loads process module for the current app and runs process steps.
+`framework/runtime/cleanup_runtime.py`  
+End behavior placeholder.
 
-`framework/services/transition_runtime.py`  
-Post-transaction decisions: mark success/skipped/failed, retry, app switch, next transaction, and end.
+`framework/runtime/__init__.py`  
+Marks the runtime package.
 
-`framework/services/cleanup_runtime.py`  
-End behavior. Stops the driver.
+## Removed During Cleanup
 
-`framework/services/runtime_state.py`  
-Shared state helpers: store step result, clear process module, load process module, and decide next action.
+The project was cleaned back to graph/config foundation. The following experimental areas were intentionally removed:
 
-## Examples
-
-`examples/config.json`  
-Demo runtime config: execution settings, logging settings, process module paths, and step file path.
-
-`examples/automation_steps.csv`  
-Step definitions. Maps phases and keywords to functions.
-
-`examples/init_module.py`  
-Demo init functions: `login` and `prepare_session`.
-
-`examples/process_module.py`  
-Demo transaction functions: `open_case`, `validate_data`, and `submit_transaction`.
-
-## Tests
-
-`tests/test_langgraph_flow.py`  
-Basic test that runs the graph and confirms transaction success, logs, and driver cleanup.
+- `apps/`
+- `examples/`
+- `tests/`
+- `framework/adapters.py`
+- `framework/runtime_loader.py`
+- `framework/steps.py`
+- old `framework/services/` package

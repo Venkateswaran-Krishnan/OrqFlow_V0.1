@@ -1,6 +1,0 @@
-order,phase,keyword,source,function_name,parameters,on_error
-1,init,login,init,login,,
-2,init,prepare_session,init,prepare_session,,
-10,process,open_case,process,open_case,,
-20,process,validate_data,process,validate_data,,
-30,process,submit,process,submit_transaction,,

@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from framework.logging_config import trace_event
+from framework.logging_config import get_logger, trace_event
 from framework.results import Outcome
-from framework.services.cleanup_runtime import cleanup_execution
-from framework.services.execution_lifecycle import initialize_execution
-from framework.services.framework_lifecycle import initialize_framework
-from framework.services.queue_runtime import create_master_queue, get_next_transaction
-from framework.services.transaction_runtime import process_current_transaction
-from framework.services.transition_runtime import resolve_transition
+from framework.runtime.cleanup_runtime import cleanup_execution
+from framework.runtime.framework_lifecycle import initialize_framework
+from framework.runtime.queue_runtime import create_master_queue, get_next_transaction
+from framework.runtime.transition_runtime import resolve_transition
 from framework.state import OrqflowState
 
 
@@ -20,7 +18,7 @@ def framework_init(state: OrqflowState) -> OrqflowState:
 
 def execution_init(state: OrqflowState) -> OrqflowState:
     _log(state, "NODE:EXECUTION_INIT")
-    return initialize_execution(state)
+    return state
 
 
 def master_queue_creator(state: OrqflowState) -> OrqflowState:
@@ -35,7 +33,14 @@ def get_transaction(state: OrqflowState) -> OrqflowState:
 
 def process_transaction(state: OrqflowState) -> OrqflowState:
     _log(state, "NODE:PROCESS_TRANSACTION")
-    return process_current_transaction(state)
+    runtime = state["runtime_config"]
+    runtime["last_status"] = Outcome.SUCCESS
+    runtime["last_error"] = None
+    runtime["next_action"] = None
+    if runtime.get("first_run"):
+        runtime["first_run"] = False
+        get_logger("nodes").info("First run completed; runtime first_run marked false")
+    return state
 
 
 def transition_hub(state: OrqflowState) -> OrqflowState:
@@ -59,6 +64,13 @@ def route_after_get(state: OrqflowState) -> Literal["process_transaction", "get_
     if action == "END":
         return "end"
     return "end"
+
+
+def route_after_execution_init(state: OrqflowState) -> Literal["master_queue_creator", "get_transaction"]:
+    settings = state.get("config", {}).get("process_config", {}).get("settings", {})
+    if settings.get("masterbot") is True:
+        return "master_queue_creator"
+    return "get_transaction"
 
 
 def route_after_transition(state: OrqflowState) -> Literal["execution_init", "get_transaction", "end"]:

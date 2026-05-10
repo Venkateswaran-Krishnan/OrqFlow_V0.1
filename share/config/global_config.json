@@ -1,0 +1,21 @@
+{
+  "execution_config": {
+    "retry_limit": 1,
+    "batch_enabled": true,
+    "batch_limit": 1,
+    "wait_enabled": false,
+    "wait_limit": 0,
+    "wait_seconds": 0
+  },
+  "logging_config": {
+    "level": "INFO",
+    "log_file": "logs/orqflow.log",
+	"timestamp_file": true,
+    "console": true,
+    "max_bytes": 10000000,
+    "backup_count": 999999
+  },
+  "process_config": {
+    "settings": {}
+  }
+}

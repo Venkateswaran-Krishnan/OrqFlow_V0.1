@@ -1,0 +1,12 @@
+{
+  "process_config": {
+    "app": "demo",
+    "object_repo_path": "../../../apps/demo/shared/object_repo",
+    "init_module": "../../../apps/demo/automations/case_processing/init.py",
+    "process_module": "../../../apps/demo/automations/case_processing/process.py",
+    "settings": {
+      "Queue": "Excel",
+	  "QueueFileLocation": "Input/Input01.xlsx"
+    }
+  }
+}
