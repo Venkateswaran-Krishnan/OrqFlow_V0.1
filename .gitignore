@@ -26,5 +26,6 @@ dist/
 # Local editor/system files
 .vscode/
 .idea/
+.tools/
 .DS_Store
 Thumbs.db
