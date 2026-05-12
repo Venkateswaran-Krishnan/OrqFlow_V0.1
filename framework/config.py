@@ -11,6 +11,7 @@ from typing import Any
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "first_run": True,
     "queue_initialized": False,
+    "application_logged_in": False,
     "retry_count": 0,
     "batch_count": 0,
     "wait_count": 0,

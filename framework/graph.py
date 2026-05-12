@@ -13,6 +13,7 @@ from framework.nodes import (
     execution_init,
     framework_init,
     get_transaction,
+    login_application,
     master_queue_creator,
     process_transaction,
     route_after_execution_init,
@@ -30,6 +31,7 @@ def build_graph():
     graph.add_node("execution_init", execution_init)
     graph.add_node("master_queue_creator", master_queue_creator)
     graph.add_node("get_transaction", get_transaction)
+    graph.add_node("login_application", login_application)
     graph.add_node("process_transaction", process_transaction)
     graph.add_node("transition_hub", transition_hub)
     graph.add_node("end", end)
@@ -49,11 +51,11 @@ def build_graph():
         "get_transaction",
         route_after_get,
         {
-            "process_transaction": "process_transaction",
-            "get_transaction": "get_transaction",
-            "end": "end",
+            "login_application": "login_application",
+            "transition_hub": "transition_hub",
         },
     )
+    graph.add_edge("login_application", "process_transaction")
     graph.add_edge("process_transaction", "transition_hub")
     graph.add_conditional_edges(
         "transition_hub",

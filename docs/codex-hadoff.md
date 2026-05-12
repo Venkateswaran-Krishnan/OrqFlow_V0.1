@@ -921,3 +921,20 @@ As of the 2026-05-10 update:
 - Excluded generated files and runtime output: `__pycache__`, `*.pyc`, and machine log folders.
 - `bootstrap.json` still points to `d:/share`; switching it to repo-local `share` is a separate runtime-location decision.
 
+## 2026-05-12 Empty Queue Routing Decision
+
+- Empty queue routing was centralized in `transition_hub`.
+- `get_transaction` now routes to `process_transaction` only when a transaction is found; otherwise it routes to `transition_hub` with `last_status = NO_TRANSACTION`.
+- `transition_runtime.resolve_transition(...)` now owns the wait/end decision for `NO_TRANSACTION`.
+- Wait behavior reads `execution_config.wait_enabled`, `wait_limit`, and `wait_seconds`; runtime `wait_count` tracks attempts.
+- When `get_transaction` later finds a transaction, it resets `runtime_config.wait_count` to `0`.
+- The graph flowchart and requirements were updated so wait/end edges originate from `transition_hub`, not `get_transaction`.
+
+## 2026-05-12 Login Application Node Decision
+
+- Added a `login_application` node between `get_transaction` and `process_transaction`.
+- When `get_transaction` finds a transaction, the graph now routes to `login_application`; empty queue still routes to `transition_hub`.
+- `login_application` checks `runtime_config.application_logged_in`.
+- If already logged in, it continues directly to `process_transaction`; otherwise it performs the current placeholder login, sets `application_logged_in = true`, and then continues.
+- The login behavior is isolated in `framework/runtime/application_runtime.py` so real app login can be plugged in later without putting login work in the LangGraph node wrapper.
+

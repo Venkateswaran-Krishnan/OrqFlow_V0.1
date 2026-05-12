@@ -55,6 +55,9 @@ Configures logging, rotating file logs, console output, and trace events.
 `framework/runtime/framework_lifecycle.py`  
 Framework startup behavior. Currently initializes the in-memory queue.
 
+`framework/runtime/application_runtime.py`  
+Application login behavior. Skips login after it has already completed for the current execution.
+
 `framework/runtime/queue_runtime.py`  
 Queue behavior: in-memory queue placeholder, fetch next transaction, wait handling, and batch count.
 

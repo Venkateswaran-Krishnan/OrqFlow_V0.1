@@ -416,6 +416,7 @@ The workflow shall include the following logical nodes:
 - `EXECUTION_INIT`
 - `MASTER_QUEUE_CREATOR`
 - `GET_TRANSACTION`
+- `LOGIN_APPLICATION`
 - `PROCESS_TRANSACTION`
 - `TRANSITION_HUB`
 - `END`
@@ -455,8 +456,16 @@ The workflow shall include the following logical nodes:
 - Lock the transaction as `IN_PROGRESS`.
 - Update batch counter.
 - Store the current transaction in `runtime_config.txn`.
-- If no transaction exists and waiting is enabled, increment wait count, wait for the configured interval, and route back to `GET_TRANSACTION`.
+- If no transaction exists, store `NO_TRANSACTION` in runtime state and route to `TRANSITION_HUB`.
+- When a transaction is found, reset `runtime_config.wait_count` to `0`.
 - Delegate transaction retrieval behavior to the queue runtime service.
+
+#### LOGIN_APPLICATION
+
+- Check whether application login has already completed for the current execution.
+- If login already completed, route directly to `PROCESS_TRANSACTION`.
+- If login has not completed, perform application login, set `runtime_config.application_logged_in` to `true`, and route to `PROCESS_TRANSACTION`.
+- Delegate login behavior to the application runtime service.
 
 #### PROCESS_TRANSACTION
 
@@ -508,11 +517,13 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 | `FRAMEWORK_INIT` | Always | `EXECUTION_INIT` |
 | `EXECUTION_INIT` | Always | `MASTER_QUEUE_CREATOR` |
 | `MASTER_QUEUE_CREATOR` | Always | `GET_TRANSACTION` |
-| `GET_TRANSACTION` | Transaction found | `PROCESS_TRANSACTION` |
-| `GET_TRANSACTION` | No transaction and wait is enabled/remaining | `GET_TRANSACTION` |
-| `GET_TRANSACTION` | No transaction and no wait remains | `END` |
+| `GET_TRANSACTION` | Transaction found | `LOGIN_APPLICATION` |
+| `GET_TRANSACTION` | No transaction | `TRANSITION_HUB` |
+| `LOGIN_APPLICATION` | Login already completed or login completed now | `PROCESS_TRANSACTION` |
 | `PROCESS_TRANSACTION` | Always after storing result | `TRANSITION_HUB` |
 | `TRANSITION_HUB` | Success/business exception and more work allowed | `GET_TRANSACTION` |
+| `TRANSITION_HUB` | No transaction and wait is enabled/remaining | `GET_TRANSACTION` |
+| `TRANSITION_HUB` | No transaction and no wait remains | `END` |
 | `TRANSITION_HUB` | System exception and retry remains | `EXECUTION_INIT` |
 | `TRANSITION_HUB` | Application switch required | `EXECUTION_INIT` |
 | `TRANSITION_HUB` | Batch/end condition reached | `END` |
@@ -532,6 +543,7 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 | `retry_count` | Tracks system retry attempts. |
 | `batch_count` | Tracks number of processed transactions in the current batch. |
 | `wait_count` | Tracks idle wait attempts when no transaction is available. |
+| `application_logged_in` | Tracks whether application login has completed for the current execution. |
 | `txn` | Holds the current transaction. |
 | `last_status` | Stores latest execution outcome such as `SUCCESS`, `SKIPPED`, or `FAILED`. |
 | `last_error` | Stores latest error details. |
@@ -549,7 +561,6 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 | Value | Meaning |
 | --- | --- |
 | `PROCESS` | `GET_TRANSACTION` found a transaction and should route to `PROCESS_TRANSACTION`. |
-| `WAIT` | No transaction was found, but wait logic is enabled and should route back to `GET_TRANSACTION`. |
 | `GET_TRANSACTION` | The framework should fetch the next transaction. |
 | `RETRY` | A system exception can still retry and should route to `EXECUTION_INIT`. |
 | `APP_SWITCH` | The active app/process must change and should route to `EXECUTION_INIT`. |
