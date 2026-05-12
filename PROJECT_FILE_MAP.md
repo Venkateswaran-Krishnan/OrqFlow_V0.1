@@ -70,6 +70,20 @@ End behavior placeholder.
 `framework/runtime/__init__.py`  
 Marks the runtime package.
 
+## Shared Runtime Assets
+
+`share/common/__init__.py`  
+Marks `share/common` as the shared utility package for process reusable code.
+
+`share/common/exceptions.py`  
+Defines shared utility exceptions, currently `CommonUtilityError`.
+
+`share/common/excel.py`  
+Reads Excel worksheets in read-only mode and returns `pandas.DataFrame` objects for process/runtime use.
+
+`share/config/`  
+Repo-local shared config model, including global config, project config, app modules, bot config, and input files.
+
 ## Removed During Cleanup
 
 The project was cleaned back to graph/config foundation. The following experimental areas were intentionally removed:

@@ -225,6 +225,28 @@ Logging configuration contains execution-scoped logging settings:
 - Process/app selection may update which read-only `process_config` is active for the execution cycle.
 - Relative config paths shall resolve from the configuration file location.
 
+## 5.6 Shared Common Utilities
+
+The shared root may contain a constant `common` folder for reusable utilities that are not specific to one application or automation process.
+
+Current convention:
+
+```text
+<share_root>/
+  common/
+    exceptions.py
+    excel.py
+```
+
+Rules:
+
+- `share/common` is for cross-process helper code only.
+- App-specific helpers remain under the app's own shared folder, for example `share/config/apps/<app>/shared`.
+- Shared utilities shall not update LangGraph state directly.
+- Shared utilities shall raise clear utility exceptions; runtime/process code maps those exceptions to framework outcomes such as `SYSTEM_EXCEPTION`.
+- The initial Excel utility reads `.xlsx` files in read-only mode and returns a `pandas.DataFrame`.
+- The framework does not currently add `share_root` to `sys.path` for `common`; dynamic loading/import strategy will be decided separately.
+
 ## 6. Driver Management
 
 ### 6.1 Design

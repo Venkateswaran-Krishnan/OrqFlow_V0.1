@@ -938,3 +938,29 @@ As of the 2026-05-10 update:
 - If already logged in, it continues directly to `process_transaction`; otherwise it performs the current placeholder login, sets `application_logged_in = true`, and then continues.
 - The login behavior is isolated in `framework/runtime/application_runtime.py` so real app login can be plugged in later without putting login work in the LangGraph node wrapper.
 
+## 2026-05-12 Shared Common Excel Utility
+
+- Created `share/common` as the shared utility home for cross-process helpers.
+- Added `share/common/exceptions.py` with `CommonUtilityError`.
+- Added `share/common/excel.py` with `read_excel_dataframe(path, sheet_name=None)`.
+- The Excel utility uses `openpyxl.load_workbook(..., read_only=True, data_only=True)` and returns a `pandas.DataFrame`.
+- The first row is treated as DataFrame headers; remaining rows become data.
+- The utility raises `CommonUtilityError` for missing files, non-file paths, missing sheets, empty sheets/header rows, permission or lock failures, invalid workbook files, and unexpected read errors.
+- `common.excel` logs through the standard Python logging system using logger name `common.excel`; framework/runtime code should catch utility exceptions, log stack traces at the runtime boundary, and map failures to `Outcome.SYSTEM_EXCEPTION`.
+- Added project dependencies `pandas>=2.0` and `openpyxl>=3.1`.
+- Decision: do not add `share_root` to `sys.path` yet. Normal package import works when the caller provides the import path, and direct `importlib` loading of `share/common/excel.py` was verified.
+
+Verification:
+
+```powershell
+python -B -c "import sys; sys.path.insert(0, 'share'); from common.excel import read_excel_dataframe; df = read_excel_dataframe('share/config/orqflow_v0_1/Input/Input01.xlsx'); print(type(df).__name__, df.shape); print(list(df.columns))"
+python -B -c "import importlib.util; spec = importlib.util.spec_from_file_location('shared_excel', 'share/common/excel.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); df = module.read_excel_dataframe('share/config/orqflow_v0_1/Input/Input01.xlsx'); print(type(df).__name__, df.shape)"
+python -m framework
+```
+
+Result:
+
+- Existing workbook loaded as `DataFrame (2, 4)` with columns `TransID`, `InputDetails`, `OutputDetails`, and `Status`.
+- Direct `importlib` loading also returned `DataFrame (2, 4)`.
+- `python -m framework` completed successfully.
+- `python -m unittest discover` found no tests in the repository.
