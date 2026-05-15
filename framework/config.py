@@ -37,6 +37,7 @@ def load_initial_state(config_path: str | Path = DEFAULT_BOOTSTRAP_PATH) -> dict
 
     return {
         "config": config,
+        "config_context": context,
         "runtime_config": dict(DEFAULT_RUNTIME_CONFIG),
         "logs": [],
     }

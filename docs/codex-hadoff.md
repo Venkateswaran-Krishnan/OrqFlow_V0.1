@@ -964,3 +964,54 @@ Result:
 - Direct `importlib` loading also returned `DataFrame (2, 4)`.
 - `python -m framework` completed successfully.
 - `python -m unittest discover` found no tests in the repository.
+
+## 2026-05-14 Framework KeySteps Loading
+
+Decision:
+
+- `framework_init` is now responsible for loading project-level `KeySteps.xlsx` at startup.
+- The workbook lives beside `project_config.json` under the active project config directory.
+- Startup state now carries resolved config location context so runtime code can locate shared utilities and project files without recalculating bootstrap paths.
+
+Source changes:
+
+- `framework/config.py` adds `config_context` to the initial state returned by `load_initial_state(...)`.
+- `config_context` currently includes `share_root`, `project_config_dir`, and `bot_config_dir` for layered/bootstrap config.
+- `framework/state.py` adds optional `config_context` and `key_steps` fields to `OrqflowState`.
+- `framework/runtime/framework_lifecycle.py` loads `<share_root>/common/excel.py` through `importlib`, reads `<project_config_dir>/KeySteps.xlsx`, stores the resulting DataFrame in `state["key_steps"]`, and logs the path, shape, and columns.
+- If KeySteps loading fails, initialization logs the stack trace, sets `runtime_config.last_status = Outcome.SYSTEM_EXCEPTION`, stores the error in `runtime_config.last_error`, and sets `runtime_config.next_action = "END"`.
+- Added `share/config/orqflow_v0_1/KeySteps.xlsx`.
+
+Current workbook check:
+
+```text
+share/config/orqflow_v0_1/KeySteps.xlsx
+shape: (1, 7)
+columns: Sequence, Bot, State, BatchCount, Application, Moduel, Status
+```
+
+Current state shape:
+
+```python
+{
+    "config": {...},
+    "config_context": {
+        "share_root": "...",
+        "project_config_dir": "...",
+        "bot_config_dir": "...",
+    },
+    "runtime_config": {...},
+    "key_steps": DataFrame(...),  # populated by framework_init
+    "logs": [],
+}
+```
+
+Verification:
+
+```powershell
+python -B -c "import importlib.util; spec=importlib.util.spec_from_file_location('shared_excel','share/common/excel.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); df=m.read_excel_dataframe('share/config/orqflow_v0_1/KeySteps.xlsx'); print(df.shape); print(list(df.columns))"
+```
+
+Result:
+
+- `KeySteps.xlsx` loaded successfully as a DataFrame with shape `(1, 7)`.
