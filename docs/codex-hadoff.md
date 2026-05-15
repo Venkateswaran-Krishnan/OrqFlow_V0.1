@@ -1015,3 +1015,23 @@ python -B -c "import importlib.util; spec=importlib.util.spec_from_file_location
 Result:
 
 - `KeySteps.xlsx` loaded successfully as a DataFrame with shape `(1, 7)`.
+
+## 2026-05-15 RPA Production Schema Baseline
+
+- Updated `Orqflow_Requirement.md` queue section with the visible MySQL `rpa_prod` schema from the no-data dump provided on 2026-05-15.
+- Captured confirmed tables: `tbl_institution`, `tbl_botlist`, `tbl_input`, `tbl_process`, `tbl_application`, and `tbl_queue`.
+- Captured intended but incomplete tables from the dump command: `tbl_login`, `tbl_login_process_link`, and `tbl_output`.
+- Documented the main relationships:
+  - `tbl_process.Ins_ID` -> `tbl_institution.ID`
+  - `tbl_input.Process` -> `tbl_process.ID`
+  - `tbl_input.Processor` -> `tbl_application.ID`
+  - `tbl_queue.Case_Details` -> `tbl_input.ID`
+  - `tbl_queue.Application_Details` -> `tbl_application.ID`
+- `tbl_input` is the main case/chargeback source table, and `tbl_queue` is the processing work-item table.
+- `Input_Identifier` is unique on `tbl_input`.
+- Visible queue/index signals include `Processing_Status`, `Case_ID + Process`, `Status`, and `Case_Number` lookup paths.
+
+Open schema caveat:
+
+- The pasted dump appears truncated or spliced around `tbl_process` and `tbl_queue`.
+- The complete `CREATE TABLE` definitions for `tbl_application`, `tbl_login`, `tbl_login_process_link`, `tbl_output`, and all `tbl_queue` columns are still needed before implementing production DB SQL.

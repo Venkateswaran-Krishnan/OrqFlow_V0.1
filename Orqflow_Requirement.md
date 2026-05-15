@@ -8,7 +8,7 @@ Build a state-driven automation framework for RPA-style browser automation using
 - **Playwright** as the browser automation execution engine.
 - **Shared Config Library** for centralized configuration.
 - **Shared Object Repository** for dynamic locator management.
-- **DB Queue** as the transaction source. Queue details are intentionally kept as a placeholder for later design.
+- **DB Queue** as the transaction source, backed by the production RPA schema captured in section 9.
 
 The framework must provide deterministic transaction processing, reusable browser execution, externalized configuration, externalized locators, and clear separation between framework lifecycle and process-specific automation logic.
 
@@ -57,7 +57,7 @@ LangGraph State Orchestrator
 | Object Repository | Loads and caches application/page locator definitions. |
 | Config Library | Provides framework, execution, and process configuration. |
 | Logging Config | Configures execution-scoped logging, log levels, console/file handlers, and rolling log files. |
-| Queue Adapter | Provides transaction retrieval and status updates. Detailed DB design is deferred. |
+| Queue Adapter | Provides transaction retrieval and status updates against the RPA queue/input tables. |
 | Runtime Modules | Contains configured init and process function files loaded at the appropriate lifecycle point. |
 | Automation Steps | Excel/CSV-driven step definitions that explicitly map keywords to functions. |
 
@@ -411,7 +411,21 @@ Step functions may return `None`, an outcome string, an outcome enum, or a dicti
 
 ### 9.1 Design
 
-The framework shall use a DB-driven queue as the source of transactions. The queue design is a placeholder in the current version and shall be refined later.
+The framework shall use a DB-driven queue as the source of transactions. The production schema is currently represented by the RPA database tables below. The framework shall keep DB access behind the queue adapter/runtime boundary so locking, status updates, and future schema refinements do not leak into LangGraph nodes or process automation modules.
+
+The schema was captured from MySQL 8.0.35 database `rpa_prod` on 2026-05-15 using a no-data dump for:
+
+- `tbl_institution`
+- `tbl_botlist`
+- `tbl_input`
+- `tbl_process`
+- `tbl_login_process_link`
+- `tbl_output`
+- `tbl_login`
+- `tbl_application`
+- `tbl_queue`
+
+The pasted dump is partially truncated around `tbl_process` and `tbl_queue`, so this document records the confirmed table intent and visible constraints. A fresh full schema dump should be used before implementing the physical DB adapter.
 
 ### 9.2 Transaction States
 
@@ -421,12 +435,119 @@ The intended transaction lifecycle is:
 READY -> IN_PROGRESS -> SUCCESS / SKIPPED / FAILED
 ```
 
-### 9.3 Placeholder Rules
+### 9.3 Schema Overview
+
+#### Institution and Process
+
+`tbl_institution` stores institution master data.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ID` | `mediumint` | Primary key, auto-increment. |
+| `Ins_Name` | `varchar(1000)` | Required institution name. |
+| `Ins_BU` | `mediumtext` | Business unit details. |
+| `Ins_Mid` | `mediumtext` | MID details. |
+
+`tbl_process` stores process definitions for institutions.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ID` | `mediumint` | Primary key, auto-increment. |
+| `Process_Name` | `varchar(255)` | Required process name. |
+| `Ins_ID` | `mediumint` | Required institution reference. |
+
+Relationship:
+
+- `tbl_process.Ins_ID` references `tbl_institution.ID`.
+
+#### Applications and Bots
+
+`tbl_application` is the application or processor master table. Its complete column list was not visible in the provided dump, but it is referenced by input and queue records through `ID`.
+
+`tbl_botlist` stores bot inventory/status.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ID` | `bigint` | Primary key, auto-increment. |
+| `BotName` | `tinytext` | Required bot name. |
+| `BotDescription` | `text` | Optional description. |
+| `BotStatus` | `tinytext` | Required bot status. |
+
+#### Input Cases
+
+`tbl_input` is the main incoming case/chargeback table and is the source case record for queue processing.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ID` | `bigint` | Primary key, auto-increment. |
+| `Processor` | `mediumint` | Required application/processor reference. |
+| `Process` | `mediumint` | Required process reference. |
+| `Case_Number` | `varchar(100)` | Optional case number. |
+| `Transaction_ID` | `varchar(100)` | Optional transaction identifier. |
+| `Case_Status` | `varchar(100)` | Optional source case status. |
+| `Chargeback_Date` | `date` | Required chargeback date. |
+| `Case_Json` | `json` | Required source payload. |
+| `Transaction_Amount` | `varchar(100)` | Optional transaction amount. |
+| `Mid_Alias` | `varchar(100)` | Optional MID alias. |
+| `MID_Number` | `varchar(100)` | Optional MID number. |
+| `Case_ID` | `varchar(100)` | Required case identifier. |
+| `Chargeback_Amount` | `varchar(100)` | Optional chargeback amount. |
+| `Transaction_Date` | `date` | Optional transaction date. |
+| `Deadline_Date` | `date` | Optional deadline date. |
+| `Card_First_Six` | `varchar(100)` | Optional first six card digits. |
+| `Card_Last_Four` | `varchar(100)` | Optional last four card digits. |
+| `Card_Type` | `varchar(100)` | Optional card type. |
+| `Status` | `varchar(100)` | Optional processing/source status. |
+| `QueueCreation_timestamp` | `datetime` | Optional queue creation timestamp. |
+| `Input_Identifier` | `varchar(100)` | Optional unique input identifier. |
+| `Institution` | `varchar(100)` | Optional denormalized institution name/code. |
+| `BUnit` | `varchar(100)` | Optional denormalized business unit. |
+
+Relationships and indexes:
+
+- `tbl_input.Process` references `tbl_process.ID`.
+- `tbl_input.Processor` references `tbl_application.ID`.
+- `Input_Identifier` is unique.
+- Indexed lookup paths include `Status`, `Case_Number`, `Case_ID + Process`, and a composite index over `ID`, `Process`, `Case_Number`, `Transaction_ID`, `Input_Identifier`, and `QueueCreation_timestamp`.
+
+#### Queue
+
+`tbl_queue` manages processing work items for input cases. The visible schema confirms these key fields and relationships:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ID` | likely numeric auto-increment | Primary key. |
+| `Case_Details` | likely `bigint` | Input case reference. |
+| `Application_Details` | likely `mediumint` | Application reference. |
+| `Processing_Status` | text/varchar-like | Queue processing state. |
+| `ProcessingEND_timestamp` | `datetime` | Optional processing end timestamp. |
+
+Relationships and indexes:
+
+- `tbl_queue.Case_Details` references `tbl_input.ID`.
+- `tbl_queue.Application_Details` references `tbl_application.ID`.
+- Indexed lookup paths include `Processing_Status` and a composite index over `ID`, `Case_Details`, and `Application_Details`.
+
+#### Login and Output Tables
+
+The no-data dump command included `tbl_login`, `tbl_login_process_link`, and `tbl_output`, but their `CREATE TABLE` sections were not present in the pasted text. The intended model is:
+
+- `tbl_login` stores application login/session configuration.
+- `tbl_login_process_link` links login records to process/application execution requirements.
+- `tbl_output` stores transaction processing results or downstream output payloads.
+
+The complete schema for these tables must be captured before implementation relies on them.
+
+### 9.4 Queue Adapter Rules
 
 - Each transaction shall be locked before processing.
 - Duplicate processing shall be prevented.
 - Failed transactions shall be recorded with a reason.
-- Detailed queue schema, locking strategy, and database implementation are deferred to a later design stage.
+- Queue selection shall prioritize records eligible by `Processing_Status`.
+- Queue records shall retain a durable link to `tbl_input.ID`.
+- Runtime transaction context shall include enough input fields for application/process routing, case lookup, and output writing.
+- The framework shall not directly query these tables from LangGraph nodes or process modules; all DB interaction shall go through the queue/runtime adapter boundary.
+- Locking strategy, transaction isolation, status vocabulary, and exact update SQL remain implementation details to confirm from the full schema and production operating rules.
 
 ## 10. LangGraph Workflow
 

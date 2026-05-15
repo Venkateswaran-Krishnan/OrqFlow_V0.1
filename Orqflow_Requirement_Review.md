@@ -56,10 +56,10 @@ These risks do not invalidate the design, but they should be controlled during i
    - Risk: browser restart logic may become tangled with init module login/session functions.
    - Mitigation: let the framework own driver restart and let configured init steps own app login/setup.
 
-5. **Queue placeholder may hide future orchestration constraints**
-   - Deferring queue schema is acceptable now.
-   - Risk: later queue locking, leasing, retries, and app switching may require changes to the graph flow.
-   - Mitigation: define a queue adapter interface early, while keeping DB details deferred.
+5. **Queue schema baseline is captured but incomplete**
+   - The visible production `rpa_prod` schema is now documented in the requirements.
+   - Risk: the pasted dump was truncated around `tbl_process` and `tbl_queue`, and full definitions for `tbl_application`, `tbl_login`, `tbl_login_process_link`, and `tbl_output` were not visible.
+   - Mitigation: keep the queue adapter interface explicit and capture a clean full schema dump before writing production SQL, locking, leasing, retries, and app-switch behavior.
 
 6. **Retry semantics can conflict with transaction status**
    - System exception retry routes to execution initialization.
@@ -103,9 +103,9 @@ These refinements would make the requirements more testable and easier to implem
    - Current intent: driver restarts during system exception and app switch.
    - Suggested refinement: framework restarts browser; configured init steps perform app-specific login/session setup.
 
-5. **Keep queue deferred but define adapter boundary**
-   - Current intent: queue DB is a placeholder.
-   - Suggested refinement: define the queue adapter methods now, while postponing DB schema and locking implementation.
+5. **Define the DB-backed queue adapter boundary**
+   - Current intent: the production schema baseline is documented, but exact SQL behavior is pending.
+   - Suggested refinement: define the queue adapter methods now using `tbl_queue` and `tbl_input` as the transaction source, while postponing exact locking/isolation SQL until the full schema is available.
 
 6. **Make non-functional requirements measurable**
    - Current language includes reliability, performance, maintainability, and observability goals.
@@ -150,4 +150,4 @@ The requirements are strong enough to describe the intended framework direction.
 - driver/repository/config/queue adapter interfaces
 - app-switch process config update contract
 
-The queue can remain a placeholder for now, but a queue adapter boundary should be defined early so later DB decisions do not force a major graph redesign.
+The queue should now be treated as a DB-backed adapter design task. The documented schema baseline should guide the contract, and a clean full dump is still required before implementation.
