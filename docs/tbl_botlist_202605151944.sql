@@ -1,0 +1,106 @@
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAB01','Production','Active'),
+	 ('CBGAB02','Production','Active'),
+	 ('CBGAB03','Production','Active'),
+	 ('CBGAB04','Production','Active'),
+	 ('CBGAB05','Production','Active'),
+	 ('CBGAB06','Production','Active'),
+	 ('CBGAB07','Community','Active'),
+	 ('CBGAB08','Production','Active'),
+	 ('CBGAB09','Production','Active'),
+	 ('CBGAB10','Production','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAB11','Production','Active'),
+	 ('CBGAB12','Production','Active'),
+	 ('CBGAB13','Community','Active'),
+	 ('CBGAB14','Developer','Active'),
+	 ('CBGAB15','Community','Active'),
+	 ('CBGAB16','Production','Active'),
+	 ('CBGAB17','Production','Active'),
+	 ('CBGAB18','Production','Active'),
+	 ('CBGAB19','Production','Active'),
+	 ('CBGAB20','Production','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAWSABNV01','Developer','Active'),
+	 ('CBGAWSABNV02','Production','Active'),
+	 ('CBGAWSABNV03','Production','Active'),
+	 ('CBGAWSABNV04','Production','Active'),
+	 ('CBGAWSABNV05','Production','Active'),
+	 ('CBGAWSABNV','Production','Active'),
+	 ('CBGAWSABNV07','Production','Active'),
+	 ('CBGAWSABNV08','Production','Active'),
+	 ('CBGAWSABNV09','Production','Active'),
+	 ('CBGAWSABNV10','Production','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAWSABNV11','Production','Active'),
+	 ('CBGAWSABNV12','Production','Active'),
+	 ('CBGAWSABNV13','Production','Active'),
+	 ('CBGAWSABSCR01','Production','Active'),
+	 ('CBGAWSABSCR02','Production','Active'),
+	 ('CBGAWSABSCR03','Production','Active'),
+	 ('CBGAWSABSCR04','Production','Active'),
+	 ('CBGAWSABSCR05','Production','Active'),
+	 ('CBGAWSABSCR06','Production','Active'),
+	 ('CBGIN9060','Community','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGIN9027','Community','Active'),
+	 ('CBGIN9015','Community','Active'),
+	 ('TestBot4','Community','Active'),
+	 ('CBGIN1258','Community','Active'),
+	 ('CBGIN1262','Community','Active'),
+	 ('CBGIN1265','Community','Active'),
+	 ('CBGIN1224','Community','Inactive'),
+	 ('Test Bot 9','Community','Inactive'),
+	 ('CBGIN1029','Community','Active'),
+	 ('CBGIN1506','Community','Inactive');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('Test Bot 12','Community','Inactive'),
+	 ('CBGIN1232','Community','Active'),
+	 ('CBGINEMS','Community','Inactive'),
+	 ('CBGIN1233','Community','Active'),
+	 ('CBGAWSABNV14','Production','Active'),
+	 ('CBGAWSABNV15','Production','Active'),
+	 ('CBGAWSABNV16','Production','Active'),
+	 ('CBGAWSABNV17','Production','Active'),
+	 ('CBGAWSABNV18','Production','Active'),
+	 ('CBGIN1145','Community','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGIN1197','Community','Active'),
+	 ('CBGIN1533','Community','Active'),
+	 ('CBGAWSABNV19','Production','Active'),
+	 ('CBGAWSABNV20','Production','Active'),
+	 ('CBGAWSABNV21','Production','Active'),
+	 ('CBGAWSABNV22','Production','Active'),
+	 ('CBGAWSABNV23','Production','Active'),
+	 ('CBGAWSABNV24','Production','Active'),
+	 ('CBGAWSABNV25','Production','Active'),
+	 ('CBGAWSABNV26','Production','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAWSABNV27','Production','Active'),
+	 ('CBGAWSABNV28','Production','Active'),
+	 ('CBGIN1645','Community','Active'),
+	 ('CC_Bot_Temp','Temp','Active'),
+	 ('CBGAWSABNV29','Production','Active'),
+	 ('CBGAWSABNV30','Production','Active'),
+	 ('CBGAWSABNV31','Production','Active'),
+	 ('CBGAWSABNV32','Production','Active'),
+	 ('CBGAWSABNV33','Production','Active'),
+	 ('CBGAWSABNV34','Production','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAWSABNV35','Production','Active'),
+	 ('CBGAWSABNV36','Production','Active'),
+	 ('CBGAWSABNV37','Production','Active'),
+	 ('CBGAWSABNV38','Production','Active'),
+	 ('CBGAWSABNV39','Production','Active'),
+	 ('CBGAWSABNV40','Production','Active'),
+	 ('CBGIN9055','Community','Active'),
+	 ('CBGIN1363','Community','Active'),
+	 ('CBGIN1596','Community','Active'),
+	 ('CBGAWSABNV41','Production','Active');
+INSERT INTO rpa_prod.tbl_botlist (BotName,BotDescription,BotStatus) VALUES
+	 ('CBGAWSABNV42','Production','Active'),
+	 ('CBGAWSABNV43','Production','Active'),
+	 ('CBGAWSABNV44','Production','Active'),
+	 ('CBGAWSABNV45','Production','Active'),
+	 ('CBGAWSABNV46','Production','Active'),
+	 ('CBGIN1670','Community','Active');

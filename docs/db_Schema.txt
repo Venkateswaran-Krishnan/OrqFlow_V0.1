@@ -1,0 +1,229 @@
+C:\Users\10862\AppData\Roaming\DBeaverData\drivers\clients\mysql_8\win\mysqldump.exe --skip-lock-tables --skip-add-drop-table --skip-extended-insert --no-data -u rpa_maint --host=172.30.5.66 --port=3306 rpa_prod tbl_institution tbl_botlist tbl_input tbl_process tbl_login_process_link tbl_output tbl_login tbl_application tbl_queue
+Task 'MySQL dump' started at Fri May 15 17:47:31 IST 2026
+-- MySQL dump 10.13  Distrib 8.0.19, for Win64 (x86_64)
+
+--
+
+-- Host: 172.30.5.66    Database: rpa_prod
+
+-- ------------------------------------------------------
+
+-- Server version	8.0.35
+
+
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+
+/*!50503 SET NAMES utf8mb4 */;
+
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+
+/*!40103 SET TIME_ZONE='+00:00' */;
+
+/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
+
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
+
+
+--
+
+-- Table structure for table `tbl_institution`
+
+--
+
+
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+
+/*!50503 SET character_set_client = utf8mb4 */;
+
+CREATE TABLE `tbl_institution` (
+
+  `ID` mediumint NOT NULL AUTO_INCREMENT,
+
+  `Ins_Name` varchar(1000) CHARACTER SET latin1 COLLATE latin1_swedish_ci NOT NULL,
+
+  `Ins_BU` mediumtext,
+
+  `Ins_Mid` mediumtext,
+
+  PRIMARY KEY (`ID`)
+
+) ENGINE=InnoDB AUTO_INCREMENT=831 DEFAULT CHARSET=latin1;
+
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+
+
+--
+
+-- Table structure for table `tbl_botlist`
+
+--
+
+
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+
+/*!50503 SET character_set_client = utf8mb4 */;
+
+CREATE TABLE `tbl_botlist` (
+
+  `ID` bigint NOT NULL AUTO_INCREMENT,
+
+  `BotName` tinytext NOT NULL,
+
+  `BotDescription` text,
+
+  `BotStatus` tinytext NOT NULL,
+
+  PRIMARY KEY (`ID`)
+
+) ENGINE=InnoDB AUTO_INCREMENT=97 DEFAULT CHARSET=latin1;
+
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+
+
+--
+
+-- Table structure for table `tbl_input`
+
+--
+
+
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+
+/*!50503 SET character_set_client = utf8mb4 */;
+
+CREATE TABLE `tbl_input` (
+
+  `ID` bigint NOT NULL AUTO_INCREMENT,
+
+  `Processor` mediumint NOT NULL,
+
+  `Process` mediumint NOT NULL,
+
+  `Case_Number` varchar(100) DEFAULT NULL,
+
+  `Transaction_ID` varchar(100) DEFAULT NULL,
+
+  `Case_Status` varchar(100) DEFAULT NULL,
+
+  `Chargeback_Date` date NOT NULL,
+
+  `Case_Json` json NOT NULL,
+
+  `Transaction_Amount` varchar(100) DEFAULT NULL,
+
+  `Mid_Alias` varchar(100) DEFAULT NULL,
+
+  `MID_Number` varchar(100) DEFAULT NULL,
+
+  `Case_ID` varchar(100) NOT NULL,
+
+  `Chargeback_Amount` varchar(100) DEFAULT NULL,
+
+  `Transaction_Date` date DEFAULT NULL,
+
+  `Deadline_Date` date DEFAULT NULL,
+
+  `Card_First_Six` varchar(100) DEFAULT NULL,
+
+  `Card_Last_Four` varchar(100) DEFAULT NULL,
+
+  `Card_Type` varchar(100) DEFAULT NULL,
+
+  `Status` varchar(100) DEFAULT NULL,
+
+  `QueueCreation_timestamp` datetime DEFAULT NULL,
+
+  `Input_Identifier` varchar(100) DEFAULT NULL,
+
+  `Institution` varchar(100) DEFAULT NULL,
+
+  `BUnit` varchar(100) DEFAULT NULL,
+
+  PRIMARY KEY (`ID`),
+
+  UNIQUE KEY `tbl_Input_UN` (`Input_Identifier`),
+
+  KEY `tbl_Input_FK_1` (`Processor`),
+
+  KEY `tbl_input_ID_IDX_UN` (`ID`,`Process`,`Case_Number`,`Transaction_ID`,`Input_Identifier`,`QueueCreation_timestamp`) USING BTREE,
+
+  KEY `tbl_input_Case_ID_IDX` (`Case_ID`,`Process`) USING BTREE,
+
+  KEY `tbl_Input_FK` (`Process`),
+
+  KEY `tbl_input_Status_IDX` (`Status`) USING BTREE,
+
+  KEY `tbl_input_Case_Number_IDX` (`Case_Number`) USING BTREE,
+
+  CONSTRAINT `tbl_Input_FK` FOREIGN KEY (`Process`) REFERENCES `tbl_process` (`ID`),
+
+  CONSTRAINT `tbl_Input_FK_1` FOREIGN KEY (`Processor`) REFERENCES `tbl_application` (`ID`)
+
+) ENGINE=InnoDB AUTO_INCREMENT=179853066 DEFAULT CHARSET=latin1;
+
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+
+
+--
+
+-- Table structure for table `tbl_process`
+
+--
+
+
+
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+
+/*!50503 SET character_set_client = utf8mb4 */;
+
+CREATE TABLE `tbl_process` (
+
+  `ID` mediumint NOT NULL AUTO_INCREMENT,
+
+  `Process_Name` varchar(255) NOT NULL,
+
+  `Ins_ID` mediumint NOT NULL,
+
+  PRIMARY KEY (`ID`),
+
+  KEY `tbl_Process_FK` (`Ins_ID`),
+
+  KEY `tbl_Process_ID_IDX` (`ID`,`Process_Name`,`Ins_ID`) USING BTREE,
+
+  CONSTRAINT `tbl_Process_FocessingEND_timestamp` datetime DEFAULT NULL,
+
+  PRIMARY KEY (`ID`),
+
+  KEY `tbl_Queue_FK` (`Case_Details`),
+
+  KEY `tbl_Queue_FK_1` (`Application_Details`),
+
+  KEY `tbl_Queue_ID_IDX` (`ID`,`Case_Details`,`Application_Details`) USING BTREE,
+
+  KEY `idx_Processing_Status` (`Processing_Status`),
+
+  CONSTRAINT `tbl_Queue_FK` FOREIGN KEY (`Case_Details`) REFERENCES `tbl_input` (`ID`),
+
+  CONSTRAINT `tbl_Queue_FK_1` FOREIGN KEY (`Application_Details`) REFERENCES `tbl_application` (`ID`)
+
+) ENGINE=InnoDB AUTO_INCREMENT=13082308 DEFAULT CHARSET=latin1;
+
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+Task 'MySQL dump' finished at Fri May 15 17:48:15 IST 2026
