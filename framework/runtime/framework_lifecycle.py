@@ -6,6 +6,7 @@ from typing import Any
 
 from framework.logging_config import get_logger
 from framework.results import Outcome
+from framework.runtime.queue_db import initialize_queue_db_adapter
 from framework.state import OrqflowState
 
 
@@ -19,8 +20,10 @@ def initialize_framework(state: OrqflowState) -> OrqflowState:
             state["key_steps"].shape,
             list(state["key_steps"].columns),
         )
+        state["queue_db"] = initialize_queue_db_adapter(state)
+        logger.info("Queue database initialized: %s", state["queue_db"].describe())
     except Exception as error:
-        logger.exception("Framework initialization failed while loading KeySteps")
+        logger.exception("Framework initialization failed")
         runtime = state["runtime_config"]
         runtime["last_status"] = Outcome.SYSTEM_EXCEPTION
         runtime["last_error"] = str(error)

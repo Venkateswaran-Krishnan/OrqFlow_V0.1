@@ -8,5 +8,16 @@
       "Queue": "Excel",
 	  "QueueFileLocation": "Input/Input01.xlsx"
     }
+  },
+  "queue_database": {
+    "type": "",
+    "sqlite_path": "",
+    "host": "",
+    "port": "",
+    "database": "",
+    "username": "",
+    "password": "",
+    "charset": "",
+    "connect_timeout": ""
   }
 }

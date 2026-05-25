@@ -75,6 +75,12 @@ def route_after_execution_init(state: OrqflowState) -> Literal["master_queue_cre
     return "get_transaction"
 
 
+def route_after_master_queue_creator(state: OrqflowState) -> Literal["get_transaction", "end"]:
+    if state["runtime_config"].get("next_action") == "END":
+        return "end"
+    return "get_transaction"
+
+
 def route_after_transition(state: OrqflowState) -> Literal["execution_init", "get_transaction", "end"]:
     action = state["runtime_config"].get("next_action")
     if action in {"APP_SWITCH", "RETRY"}:

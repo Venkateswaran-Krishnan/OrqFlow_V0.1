@@ -10,5 +10,6 @@ class OrqflowState(TypedDict, total=False):
     repo: Any
     driver: Any
     queue: Any
+    queue_db: Any
     key_steps: Any
     logs: list[str]

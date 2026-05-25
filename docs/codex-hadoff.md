@@ -1035,3 +1035,17 @@ Open schema caveat:
 
 - The pasted dump appears truncated or spliced around `tbl_process` and `tbl_queue`.
 - The complete `CREATE TABLE` definitions for `tbl_application`, `tbl_login`, `tbl_login_process_link`, `tbl_output`, and all `tbl_queue` columns are still needed before implementing production DB SQL.
+
+## 2026-05-15 SQLite Queue Backend Planning
+
+- Added `docs/db_Schema_Full.sql` as the current schema baseline for SQLite queue planning.
+- Added `docs/sqlite_queue_backend_plan.md`.
+- SQLite is intended to manage the framework queue and replicate the production DB schema rather than introduce framework-only columns.
+- `tbl_input.Case_Json` is the confirmed full input-details payload column.
+- `tbl_queue.Case_Details` links queue rows to `tbl_input.ID`; it is not the JSON payload.
+- Masterbot queue creation should accept supplied data as a DataFrame, regardless of whether the upstream source is Excel or an API call.
+- Masterbot should insert into `tbl_input` first, then insert linked `tbl_queue` rows.
+- `get_transaction` should join queue and input data, mark selected work as `In Processing`, and set `ProcessingSTART_timestamp`.
+- Process runtime may update `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
+- `transition_hub` should write configured final success/fail/skip statuses and set `ProcessingEND_timestamp`.
+- Status text should be configurable so production names can be matched exactly; `In Processing` is the confirmed in-progress value.

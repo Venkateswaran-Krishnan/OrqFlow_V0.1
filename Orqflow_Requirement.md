@@ -411,9 +411,9 @@ Step functions may return `None`, an outcome string, an outcome enum, or a dicti
 
 ### 9.1 Design
 
-The framework shall use a DB-driven queue as the source of transactions. The production schema is currently represented by the RPA database tables below. The framework shall keep DB access behind the queue adapter/runtime boundary so locking, status updates, and future schema refinements do not leak into LangGraph nodes or process automation modules.
+The framework shall use a DB-driven queue as the source of transactions. The local implementation shall use SQLite to manage the queue while replicating the production DB table model. The framework shall keep DB access behind the queue adapter/runtime boundary so locking, status updates, and future schema refinements do not leak into LangGraph nodes or process automation modules.
 
-The schema was captured from MySQL 8.0.35 database `rpa_prod` on 2026-05-15 using a no-data dump for:
+The current schema baseline is `docs/db_Schema_Full.sql`, captured from MySQL 8.0.35 database `rpa_test_new` on 2026-05-15 using a no-data dump for:
 
 - `tbl_institution`
 - `tbl_botlist`
@@ -425,14 +425,14 @@ The schema was captured from MySQL 8.0.35 database `rpa_prod` on 2026-05-15 usin
 - `tbl_application`
 - `tbl_queue`
 
-The pasted dump is partially truncated around `tbl_process` and `tbl_queue`, so this document records the confirmed table intent and visible constraints. A fresh full schema dump should be used before implementing the physical DB adapter.
+The older `docs/db_Schema.txt` dump is partially truncated around `tbl_process` and `tbl_queue`; implementations shall prefer `docs/db_Schema_Full.sql` when creating the SQLite schema.
 
 ### 9.2 Transaction States
 
-The intended transaction lifecycle is:
+The intended transaction lifecycle is configurable. The confirmed in-progress value is `In Processing`; queue-created and final success/fail/skip values shall be read from configuration so production naming can be matched exactly.
 
 ```text
-READY -> IN_PROGRESS -> SUCCESS / SKIPPED / FAILED
+<eligible status> -> In Processing -> <success / skipped / failed status>
 ```
 
 ### 9.3 Schema Overview
@@ -462,7 +462,12 @@ Relationship:
 
 #### Applications and Bots
 
-`tbl_application` is the application or processor master table. Its complete column list was not visible in the provided dump, but it is referenced by input and queue records through `ID`.
+`tbl_application` is the application or processor master table.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ID` | `mediumint` | Primary key, auto-increment. |
+| `App_Name` | `varchar(100)` | Required application name. |
 
 `tbl_botlist` stores bot inventory/status.
 
@@ -512,14 +517,21 @@ Relationships and indexes:
 
 #### Queue
 
-`tbl_queue` manages processing work items for input cases. The visible schema confirms these key fields and relationships:
+`tbl_queue` manages processing work items for input cases.
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| `ID` | likely numeric auto-increment | Primary key. |
-| `Case_Details` | likely `bigint` | Input case reference. |
-| `Application_Details` | likely `mediumint` | Application reference. |
-| `Processing_Status` | text/varchar-like | Queue processing state. |
+| `ID` | `bigint` | Primary key, auto-increment. |
+| `Case_Details` | `bigint` | Input case reference. |
+| `Application_Details` | `mediumint` | Application reference. |
+| `Bot_Name` | `varchar(100)` | Optional assigned bot name. |
+| `Processing_Status` | `varchar(100)` | Queue processing state. |
+| `CTO_Details` | `json` | Optional runtime/details JSON. |
+| `Evidence_Status` | `json` | Optional evidence status JSON. |
+| `Output_tbl_Status` | `tinyint(1)` | Optional output table flag/status. |
+| `Bot_Comment` | `text` | Optional runtime comment or reason. |
+| `Dependency` | `json` | Optional dependency JSON. |
+| `ProcessingSTART_timestamp` | `datetime` | Optional processing start timestamp. |
 | `ProcessingEND_timestamp` | `datetime` | Optional processing end timestamp. |
 
 Relationships and indexes:
@@ -545,9 +557,14 @@ The complete schema for these tables must be captured before implementation reli
 - Failed transactions shall be recorded with a reason.
 - Queue selection shall prioritize records eligible by `Processing_Status`.
 - Queue records shall retain a durable link to `tbl_input.ID`.
-- Runtime transaction context shall include enough input fields for application/process routing, case lookup, and output writing.
+- Master queue creation shall accept supplied items as a DataFrame, whether the upstream source is Excel or an API call.
+- Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then insert linked queue rows into `tbl_queue`.
+- Runtime transaction context shall include queue fields, input fields, and parsed `tbl_input.Case_Json` for process use.
+- `get_transaction` shall mark the selected queue item as `In Processing` and set `ProcessingSTART_timestamp`.
+- `process_transaction` may update runtime queue columns such as `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
+- `transition_hub` shall update final configured status and `ProcessingEND_timestamp`.
 - The framework shall not directly query these tables from LangGraph nodes or process modules; all DB interaction shall go through the queue/runtime adapter boundary.
-- Locking strategy, transaction isolation, status vocabulary, and exact update SQL remain implementation details to confirm from the full schema and production operating rules.
+- Locking strategy, transaction isolation, final status vocabulary, and exact update SQL remain implementation details to confirm from production operating rules.
 
 ## 10. LangGraph Workflow
 
@@ -801,7 +818,7 @@ The Orqflow framework shall provide a state-driven automation foundation where:
 - **Repository** provides dynamic locators.
 - **Config** controls framework and process behavior.
 - **Logging Config** controls operational logging and rolling files.
-- **Queue** feeds transactions through a placeholder DB-backed model.
+- **Queue** feeds transactions through a SQLite-backed model that mirrors the production queue/input schema.
 - **Runtime Modules** supply configured init and process functions.
 - **Automation Steps** drive keyword-based function execution from Excel/CSV definitions.
 

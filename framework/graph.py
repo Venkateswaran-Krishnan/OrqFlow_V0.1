@@ -18,6 +18,7 @@ from framework.nodes import (
     process_transaction,
     route_after_execution_init,
     route_after_get,
+    route_after_master_queue_creator,
     route_after_transition,
     transition_hub,
 )
@@ -46,7 +47,14 @@ def build_graph():
             "get_transaction": "get_transaction",
         },
     )
-    graph.add_edge("master_queue_creator", "get_transaction")
+    graph.add_conditional_edges(
+        "master_queue_creator",
+        route_after_master_queue_creator,
+        {
+            "get_transaction": "get_transaction",
+            "end": "end",
+        },
+    )
     graph.add_conditional_edges(
         "get_transaction",
         route_after_get,

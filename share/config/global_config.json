@@ -15,6 +15,24 @@
     "max_bytes": 10000000,
     "backup_count": 999999
   },
+  "queue_database": {
+    "type": "sqlite",
+    "sqlite_path": "rpa_test_sqlite_db",
+    "host": "",
+    "port": 3306,
+    "database": "",
+    "username": "",
+    "password": "",
+    "charset": "utf8mb4",
+    "connect_timeout": 10
+  },
+  "queue_config": {
+    "eligible_status": "Queue Created",
+    "in_progress_status": "In Processing",
+    "success_status": "Success",
+    "failed_status": "Failed",
+    "skipped_status": "Skipped"
+  },
   "process_config": {
     "settings": {}
   }
