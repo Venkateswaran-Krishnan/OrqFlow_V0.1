@@ -10,7 +10,7 @@
   "logging_config": {
     "level": "INFO",
     "log_file": "logs/orqflow.log",
-	"timestamp_file": true,
+	  "timestamp_file": true,
     "console": true,
     "max_bytes": 10000000,
     "backup_count": 999999

@@ -1,6 +1,6 @@
 {
   "process_config": {
-    "app": "demo",
+    "Process_ID": "12",
     "object_repo_path": "../../../apps/demo/shared/object_repo",
     "init_module": "../../../apps/demo/automations/case_processing/init.py",
     "process_module": "../../../apps/demo/automations/case_processing/process.py",
@@ -19,5 +19,5 @@
     "password": "",
     "charset": "",
     "connect_timeout": ""
-  }
+  }  
 }

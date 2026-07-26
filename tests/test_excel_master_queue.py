@@ -70,6 +70,15 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertIs(result, state)
         self.assertEqual(0, self._count("tbl_input"))
 
+    def test_api_source_uses_api_adapter_placeholder(self) -> None:
+        state = self._state(queue_source="API")
+
+        create_master_queue(state)
+
+        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+        self.assertIn("API input loading is not configured yet", state["runtime_config"]["last_error"])
+        self.assertEqual(0, self._count("tbl_input"))
+
     def test_missing_mandatory_column_fails_before_insert(self) -> None:
         workbook_path = self._write_excel(
             ["Processor", "Process", "Chargeback_Date", "Case_Json"],
@@ -88,14 +97,13 @@ class ExcelMasterQueueTests(unittest.TestCase):
         workbook_path = self._write_excel(
             [
                 "Processor",
-                "Process",
                 "Chargeback_Date",
                 "Case_Json",
                 "Case_ID",
                 "Ignored_Column",
             ],
             [
-                [10, 20, "2026-05-25", '{"case": "A"}', "CASE-1", "ignore me"],
+                [10, "2026-05-25", '{"case": "A"}', "CASE-1", "ignore me"],
             ],
         )
         state = self._state(queue_file=workbook_path.name)
@@ -107,26 +115,84 @@ class ExcelMasterQueueTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual(1, len(rows))
         self.assertEqual(10, rows[0]["Processor"])
-        self.assertEqual(20, rows[0]["Process"])
+        self.assertEqual(12, rows[0]["Process"])
         self.assertEqual("CASE-1", rows[0]["Case_ID"])
-        self.assertEqual("20_CASE-1", rows[0]["Input_Identifier"])
+        self.assertEqual("12_CASE-1", rows[0]["Input_Identifier"])
         self.assertEqual(0, self._count("tbl_queue"))
+        self.assertEqual(1, state["runtime_config"]["input_load_summary"]["inserted_count"])
 
-    def test_duplicate_input_identifier_fails_on_duplicate_row(self) -> None:
+    def test_source_process_column_is_ignored(self) -> None:
         workbook_path = self._write_excel(
             ["Processor", "Process", "Chargeback_Date", "Case_Json", "Case_ID"],
+            [[10, 999, "2026-05-25", "{}", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+
+        row = self.db.connection.execute(
+            "SELECT Process, Input_Identifier FROM tbl_input"
+        ).fetchone()
+        self.assertEqual(12, row["Process"])
+        self.assertEqual("12_CASE-1", row["Input_Identifier"])
+
+    def test_missing_process_id_fails_before_insert(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [[10, "2026-05-25", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name, process_id="")
+
+        create_master_queue(state)
+
+        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+        self.assertIn("process_config.Process_ID", state["runtime_config"]["last_error"])
+        self.assertEqual(0, self._count("tbl_input"))
+
+    def test_missing_required_value_skips_only_that_row(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
             [
-                [10, 20, "2026-05-25", "{}", "CASE-1"],
-                [10, 20, "2026-05-25", "{}", "CASE-1"],
+                [10, "2026-05-25", "CASE-1"],
+                [None, "2026-05-25", "CASE-2"],
+                [10, "2026-05-25", "CASE-3"],
             ],
         )
         state = self._state(queue_file=workbook_path.name)
 
         create_master_queue(state)
 
-        self.assertEqual(1, self._count("tbl_input"))
-        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
-        self.assertIn("Excel row 3", state["runtime_config"]["last_error"])
+        summary = state["runtime_config"]["input_load_summary"]
+        self.assertEqual(2, self._count("tbl_input"))
+        self.assertEqual(2, summary["inserted_count"])
+        self.assertEqual(1, summary["failed_count"])
+        self.assertEqual(3, summary["failed_rows"][0]["row"])
+        self.assertIn("Processor", summary["failed_rows"][0]["error"])
+
+    def test_duplicate_input_identifier_skips_row_and_continues(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [
+                [10, "2026-05-25", "CASE-1"],
+                [10, "2026-05-25", "CASE-1"],
+                [10, "2026-05-25", "CASE-2"],
+            ],
+        )
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+
+        summary = state["runtime_config"]["input_load_summary"]
+        rows = self.db.connection.execute(
+            "SELECT Case_ID, Input_Identifier, Status FROM tbl_input ORDER BY ID"
+        ).fetchall()
+        self.assertEqual(2, len(rows))
+        self.assertEqual(["CASE-1", "CASE-2"], [row["Case_ID"] for row in rows])
+        self.assertEqual(["12_CASE-1", "12_CASE-2"], [row["Input_Identifier"] for row in rows])
+        self.assertTrue(all(row["Status"] is None for row in rows))
+        self.assertEqual(2, summary["inserted_count"])
+        self.assertEqual(1, summary["failed_count"])
+        self.assertIn("DB insert failed", summary["failed_rows"][0]["error"])
 
     def test_tbl_input_columns_query_returns_usable_sqlite_columns(self) -> None:
         rows = self.db.connection.execute(self.db.queries["tbl_input_columns"]).fetchall()
@@ -161,6 +227,28 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertIsNone(state["runtime_config"]["txn"])
         self.assertEqual("NO_TRANSACTION", state["runtime_config"]["last_status"])
 
+    def test_get_next_transaction_missing_queue_db_fails_gracefully(self) -> None:
+        state = self._state()
+        state.pop("queue_db")
+
+        get_next_transaction(state)
+
+        self.assertIsNone(state["runtime_config"]["txn"])
+        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+        self.assertIn("queue_db", state["runtime_config"]["last_error"])
+        self.assertIsNone(state["runtime_config"]["next_action"])
+
+    def test_get_next_transaction_query_error_fails_gracefully(self) -> None:
+        state = self._state()
+        self.db.queries["fetch_next_transaction"] = "SELECT * FROM missing_table"
+
+        get_next_transaction(state)
+
+        self.assertIsNone(state["runtime_config"]["txn"])
+        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+        self.assertIn("missing_table", state["runtime_config"]["last_error"])
+        self.assertIsNone(state["runtime_config"]["next_action"])
+
     def test_database_queue_writes_success_status(self) -> None:
         self._insert_input_and_queue("Queue Created")
         state = self._state()
@@ -175,8 +263,21 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertIsNone(queue_row["Bot_Comment"])
         self.assertIsNotNone(queue_row["ProcessingEND_timestamp"])
 
+    def test_success_with_no_reason_preserves_existing_bot_comment(self) -> None:
+        self._insert_input_and_queue("Queue Created", bot_comment="existing note")
+        state = self._state()
+        get_next_transaction(state)
+
+        state["queue"].mark_success(state["runtime_config"]["txn"])
+
+        queue_row = self.db.connection.execute(
+            "SELECT Processing_Status, Bot_Comment FROM tbl_queue"
+        ).fetchone()
+        self.assertEqual("Success", queue_row["Processing_Status"])
+        self.assertEqual("existing note", queue_row["Bot_Comment"])
+
     def test_database_queue_writes_failed_and_skipped_statuses(self) -> None:
-        input_id = self._insert_input_and_queue("Queue Created")
+        input_id = self._insert_input_and_queue("Queue Created", bot_comment="first note")
         state = self._state()
         get_next_transaction(state)
         state["queue"].mark_failed(state["runtime_config"]["txn"], "failed reason")
@@ -197,7 +298,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
             "SELECT Processing_Status, Bot_Comment FROM tbl_queue ORDER BY ID"
         ).fetchall()
         self.assertEqual("Failed", rows[0]["Processing_Status"])
-        self.assertEqual("failed reason", rows[0]["Bot_Comment"])
+        self.assertEqual("first note\nfailed reason", rows[0]["Bot_Comment"])
         self.assertEqual("Skipped", rows[1]["Processing_Status"])
         self.assertEqual("skip reason", rows[1]["Bot_Comment"])
 
@@ -267,7 +368,13 @@ class ExcelMasterQueueTests(unittest.TestCase):
         workbook.close()
         return path
 
-    def _state(self, masterbot: bool = True, queue_file: str = "input.xlsx") -> dict:
+    def _state(
+        self,
+        masterbot: bool = True,
+        queue_file: str = "input.xlsx",
+        process_id: str = "12",
+        queue_source: str = "Excel",
+    ) -> dict:
         return {
             "config": {
                 "queue_config": {
@@ -278,10 +385,12 @@ class ExcelMasterQueueTests(unittest.TestCase):
                     "skipped_status": "Skipped",
                 },
                 "process_config": {
+                    "Process_ID": process_id,
                     "settings": {
                         "masterbot": masterbot,
-                        "Queue": "Excel",
+                        "Queue": queue_source,
                         "QueueFileLocation": queue_file,
+                        "ApiConfig": {},
                         "bot": "BOT-1",
                     }
                 }
@@ -299,7 +408,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
         row = self.db.connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
         return int(row["count"])
 
-    def _insert_input_and_queue(self, status: str) -> int:
+    def _insert_input_and_queue(self, status: str, bot_comment: str | None = None) -> int:
         cursor = self.db.connection.execute(
             """
             INSERT INTO tbl_input (
@@ -317,10 +426,10 @@ class ExcelMasterQueueTests(unittest.TestCase):
         input_id = int(cursor.lastrowid)
         self.db.connection.execute(
             """
-            INSERT INTO tbl_queue (Case_Details, Application_Details, Processing_Status)
-            VALUES (?, ?, ?)
+            INSERT INTO tbl_queue (Case_Details, Application_Details, Processing_Status, Bot_Comment)
+            VALUES (?, ?, ?, ?)
             """,
-            [input_id, 10, status],
+            [input_id, 10, status, bot_comment],
         )
         self.db.connection.commit()
         return input_id

@@ -58,20 +58,32 @@ WHERE ID = ?;
 -- name: mark_transaction_success
 UPDATE tbl_queue
 SET Processing_Status = ?,
-    Bot_Comment = ?,
+    Bot_Comment = CASE
+        WHEN ? IS NULL OR ? = '' THEN Bot_Comment
+        WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN ?
+        ELSE Bot_Comment || char(10) || ?
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = ?;
 
 -- name: mark_transaction_skipped
 UPDATE tbl_queue
 SET Processing_Status = ?,
-    Bot_Comment = ?,
+    Bot_Comment = CASE
+        WHEN ? IS NULL OR ? = '' THEN Bot_Comment
+        WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN ?
+        ELSE Bot_Comment || char(10) || ?
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = ?;
 
 -- name: mark_transaction_failed
 UPDATE tbl_queue
 SET Processing_Status = ?,
-    Bot_Comment = ?,
+    Bot_Comment = CASE
+        WHEN ? IS NULL OR ? = '' THEN Bot_Comment
+        WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN ?
+        ELSE Bot_Comment || char(10) || ?
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = ?;

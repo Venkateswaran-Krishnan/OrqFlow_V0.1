@@ -2,11 +2,11 @@
   "process_config": {
     "settings": {
       "bot": "VENKYDESKTOP",
-	  "masterbot": false
+	    "masterbot": false
 		}
 	},
   "logging_config": {
-    "level": "DEBUG"
+    "level": "DEBUG",
+    "log_file": "logs/orqflow.log"
   }
-
 }

@@ -45,7 +45,8 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
             runtime["retry_count"] = runtime.get("retry_count", 0) + 1
             runtime["next_action"] = "RETRY"
             return state
-        state["queue"].mark_failed(txn, runtime.get("last_error"))
+        if txn is not None:
+            state["queue"].mark_failed(txn, runtime.get("last_error"))
         runtime["retry_count"] = 0
         runtime["txn"] = None
         runtime["next_action"] = next_after_success(state)

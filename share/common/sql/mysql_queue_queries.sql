@@ -58,20 +58,32 @@ WHERE ID = %s;
 -- name: mark_transaction_success
 UPDATE tbl_queue
 SET Processing_Status = %s,
-    Bot_Comment = %s,
+    Bot_Comment = CASE
+        WHEN %s IS NULL OR %s = '' THEN Bot_Comment
+        WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN %s
+        ELSE CONCAT(Bot_Comment, CHAR(10), %s)
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = %s;
 
 -- name: mark_transaction_skipped
 UPDATE tbl_queue
 SET Processing_Status = %s,
-    Bot_Comment = %s,
+    Bot_Comment = CASE
+        WHEN %s IS NULL OR %s = '' THEN Bot_Comment
+        WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN %s
+        ELSE CONCAT(Bot_Comment, CHAR(10), %s)
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = %s;
 
 -- name: mark_transaction_failed
 UPDATE tbl_queue
 SET Processing_Status = %s,
-    Bot_Comment = %s,
+    Bot_Comment = CASE
+        WHEN %s IS NULL OR %s = '' THEN Bot_Comment
+        WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN %s
+        ELSE CONCAT(Bot_Comment, CHAR(10), %s)
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = %s;
