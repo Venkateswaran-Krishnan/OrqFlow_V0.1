@@ -5,6 +5,33 @@ PRAGMA table_info(tbl_input);
 INSERT INTO tbl_input ({columns})
 VALUES ({placeholders});
 
+-- name: select_application_ids
+SELECT ID
+FROM tbl_application;
+
+-- name: select_inputs_for_queue_creation
+SELECT ID
+FROM tbl_input
+WHERE Process = ?
+  AND (Status IS NULL OR TRIM(Status) = '')
+ORDER BY ID;
+
+-- name: insert_tbl_queue
+INSERT INTO tbl_queue (
+    Case_Details,
+    Application_Details,
+    Processing_Status
+)
+VALUES (?, ?, ?);
+
+-- name: mark_input_queue_created
+UPDATE tbl_input
+SET Status = ?,
+    QueueCreation_timestamp = CURRENT_TIMESTAMP
+WHERE ID = ?
+  AND Process = ?
+  AND (Status IS NULL OR TRIM(Status) = '');
+
 -- name: fetch_next_transaction
 SELECT
     q.ID AS queue_id,

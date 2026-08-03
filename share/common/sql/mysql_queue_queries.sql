@@ -5,6 +5,33 @@ SHOW COLUMNS FROM tbl_input;
 INSERT INTO tbl_input ({columns})
 VALUES ({placeholders});
 
+-- name: select_application_ids
+SELECT ID
+FROM tbl_application;
+
+-- name: select_inputs_for_queue_creation
+SELECT ID
+FROM tbl_input
+WHERE Process = %s
+  AND (Status IS NULL OR TRIM(Status) = '')
+ORDER BY ID;
+
+-- name: insert_tbl_queue
+INSERT INTO tbl_queue (
+    Case_Details,
+    Application_Details,
+    Processing_Status
+)
+VALUES (%s, %s, %s);
+
+-- name: mark_input_queue_created
+UPDATE tbl_input
+SET Status = %s,
+    QueueCreation_timestamp = CURRENT_TIMESTAMP
+WHERE ID = %s
+  AND Process = %s
+  AND (Status IS NULL OR TRIM(Status) = '');
+
 -- name: fetch_next_transaction
 SELECT
     q.ID AS queue_id,

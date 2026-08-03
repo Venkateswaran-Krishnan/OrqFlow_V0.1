@@ -558,7 +558,8 @@ The complete schema for these tables must be captured before implementation reli
 - Queue selection shall prioritize records eligible by `Processing_Status`.
 - Queue records shall retain a durable link to `tbl_input.ID`.
 - Master queue creation shall accept supplied items as a DataFrame, whether the upstream source is Excel or an API call.
-- Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then insert linked queue rows into `tbl_queue`.
+- Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then create one linked `tbl_queue` row for each distinct application in the sequenced `PROCESS_TRANSACTION` KeySteps.
+- Queue creation shall consider only inputs for the configured process whose status is null or blank. The complete application queue set and the input's queue-created status/timestamp shall commit atomically per input.
 - Runtime transaction context shall include queue fields, input fields, and parsed `tbl_input.Case_Json` for process use.
 - `get_transaction` shall mark the selected queue item as `In Processing` and set `ProcessingSTART_timestamp`.
 - `process_transaction` may update runtime queue columns such as `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.

@@ -12,7 +12,7 @@ Add SQLite as the local queue database while preserving the production DB table 
   - `tbl_queue.Case_Details` as the reference to `tbl_input.ID`.
   - `tbl_queue.Application_Details`, `Bot_Name`, `Processing_Status`, `CTO_Details`, `Evidence_Status`, `Output_tbl_Status`, `Bot_Comment`, `Dependency`, `ProcessingSTART_timestamp`, and `ProcessingEND_timestamp`.
 - Masterbot queue creation will accept supplied data as a DataFrame, whether it originally came from Excel or a production API.
-- Masterbot will map DataFrame rows into production-compatible `tbl_input` columns, including `Case_Json` for the complete input detail payload, then create linked `tbl_queue` rows.
+- Masterbot will map DataFrame rows into production-compatible `tbl_input` columns, including `Case_Json` for the complete input detail payload, then create one linked `tbl_queue` row for each distinct application in the sequenced `PROCESS_TRANSACTION` KeySteps.
 - `get_transaction` will fetch the next eligible queue row by configured status, join it with `tbl_input`, mark it as `In Processing`, set `ProcessingSTART_timestamp`, and expose a transaction dict containing:
   - queue fields
   - input table fields
@@ -41,7 +41,7 @@ Status names remain configurable because production final names will be confirme
 ## Test Plan
 
 - Verify SQLite schema initialization creates production-compatible tables.
-- Verify masterbot inserts DataFrame rows into `tbl_input` and linked rows into `tbl_queue`.
+- Verify masterbot inserts DataFrame rows into `tbl_input` and creates the complete distinct-application queue set atomically for each eligible input.
 - Verify `get_transaction` selects only eligible rows and updates status to `In Processing`.
 - Verify fetched transaction includes `Case_Json` plus other `tbl_input` details.
 - Verify transition hub writes success, failed, and skipped statuses correctly.

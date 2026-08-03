@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
 from openpyxl import Workbook
 
 from framework.runtime.queue_db import SQLiteQueueDatabase, load_queue_queries
@@ -21,6 +22,9 @@ class SharedQueueQueryTests(unittest.TestCase):
 
         self.assertIn("tbl_input_columns", queries)
         self.assertIn("insert_tbl_input", queries)
+        self.assertIn("insert_tbl_queue", queries)
+        self.assertIn("select_inputs_for_queue_creation", queries)
+        self.assertIn("mark_input_queue_created", queries)
         self.assertEqual("PRAGMA table_info(tbl_input);", queries["tbl_input_columns"])
         self.assertEqual(
             "INSERT INTO tbl_input ({columns})\nVALUES ({placeholders});",
@@ -32,6 +36,9 @@ class SharedQueueQueryTests(unittest.TestCase):
 
         self.assertIn("tbl_input_columns", queries)
         self.assertIn("insert_tbl_input", queries)
+        self.assertIn("insert_tbl_queue", queries)
+        self.assertIn("select_inputs_for_queue_creation", queries)
+        self.assertIn("mark_input_queue_created", queries)
         self.assertEqual("SHOW COLUMNS FROM tbl_input;", queries["tbl_input_columns"])
         self.assertEqual(
             "INSERT INTO tbl_input ({columns})\nVALUES ({placeholders});",
@@ -93,7 +100,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual("END", state["runtime_config"]["next_action"])
         self.assertEqual(0, self._count("tbl_input"))
 
-    def test_valid_excel_rows_insert_into_tbl_input(self) -> None:
+    def test_valid_excel_rows_insert_into_input_and_distinct_application_queues(self) -> None:
         workbook_path = self._write_excel(
             [
                 "Processor",
@@ -111,15 +118,43 @@ class ExcelMasterQueueTests(unittest.TestCase):
         create_master_queue(state)
 
         rows = self.db.connection.execute(
-            "SELECT Processor, Process, Case_ID, Input_Identifier FROM tbl_input"
+            """
+            SELECT Processor, Process, Case_ID, Input_Identifier, Status,
+                   QueueCreation_timestamp
+            FROM tbl_input
+            """
         ).fetchall()
         self.assertEqual(1, len(rows))
         self.assertEqual(10, rows[0]["Processor"])
         self.assertEqual(12, rows[0]["Process"])
         self.assertEqual("CASE-1", rows[0]["Case_ID"])
         self.assertEqual("12_CASE-1", rows[0]["Input_Identifier"])
-        self.assertEqual(0, self._count("tbl_queue"))
+        self.assertEqual("Queue Created", rows[0]["Status"])
+        self.assertIsNotNone(rows[0]["QueueCreation_timestamp"])
+        queue_rows = self.db.connection.execute(
+            """
+            SELECT Case_Details, Application_Details, Processing_Status, Bot_Name
+            FROM tbl_queue
+            ORDER BY ID
+            """
+        ).fetchall()
+        self.assertEqual(2, len(queue_rows))
+        self.assertEqual([13, 14], [row["Application_Details"] for row in queue_rows])
+        self.assertTrue(all(row["Case_Details"] == 1 for row in queue_rows))
+        self.assertTrue(all(row["Processing_Status"] == "Queue Created" for row in queue_rows))
+        self.assertTrue(all(row["Bot_Name"] is None for row in queue_rows))
         self.assertEqual(1, state["runtime_config"]["input_load_summary"]["inserted_count"])
+        self.assertEqual(
+            {
+                "distinct_application_count": 2,
+                "eligible_input_count": 1,
+                "queued_input_count": 1,
+                "created_queue_count": 2,
+                "failed_input_count": 0,
+                "failed_inputs": [],
+            },
+            state["runtime_config"]["queue_creation_summary"],
+        )
 
     def test_source_process_column_is_ignored(self) -> None:
         workbook_path = self._write_excel(
@@ -189,10 +224,197 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual(2, len(rows))
         self.assertEqual(["CASE-1", "CASE-2"], [row["Case_ID"] for row in rows])
         self.assertEqual(["12_CASE-1", "12_CASE-2"], [row["Input_Identifier"] for row in rows])
-        self.assertTrue(all(row["Status"] is None for row in rows))
+        self.assertTrue(all(row["Status"] == "Queue Created" for row in rows))
         self.assertEqual(2, summary["inserted_count"])
         self.assertEqual(1, summary["failed_count"])
         self.assertIn("DB insert failed", summary["failed_rows"][0]["error"])
+        self.assertEqual(4, self._count("tbl_queue"))
+
+    def test_distinct_applications_follow_first_sequence_order(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [[10, "2026-05-25", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        state["key_steps"] = self._key_steps(
+            [(30, 13), (10, "14"), (20, 13.0), (40, 15)]
+        )
+
+        create_master_queue(state)
+
+        rows = self.db.connection.execute(
+            "SELECT Application_Details FROM tbl_queue ORDER BY ID"
+        ).fetchall()
+        self.assertEqual([14, 13, 15], [row["Application_Details"] for row in rows])
+        self.assertEqual(
+            3,
+            state["runtime_config"]["queue_creation_summary"]["distinct_application_count"],
+        )
+
+    def test_only_matching_process_and_blank_status_inputs_are_queued(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [],
+        )
+        eligible_ids = [
+            self._insert_input(process=12, case_id="ELIGIBLE-NULL", status=None),
+            self._insert_input(process=12, case_id="ELIGIBLE-EMPTY", status=""),
+            self._insert_input(process=12, case_id="ELIGIBLE-SPACE", status="   "),
+        ]
+        other_process_id = self._insert_input(process=99, case_id="OTHER", status=None)
+        completed_id = self._insert_input(
+            process=12,
+            case_id="DONE",
+            status="Already Queued",
+        )
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+
+        rows = self.db.connection.execute(
+            "SELECT Case_Details, Application_Details FROM tbl_queue ORDER BY ID"
+        ).fetchall()
+        self.assertEqual(6, len(rows))
+        self.assertEqual(
+            [eligible_ids[0], eligible_ids[0], eligible_ids[1], eligible_ids[1], eligible_ids[2], eligible_ids[2]],
+            [row["Case_Details"] for row in rows],
+        )
+        untouched = self.db.connection.execute(
+            "SELECT ID, Status FROM tbl_input WHERE ID IN (?, ?) ORDER BY ID",
+            [other_process_id, completed_id],
+        ).fetchall()
+        self.assertIsNone(untouched[0]["Status"])
+        self.assertEqual("Already Queued", untouched[1]["Status"])
+
+    def test_rerun_does_not_duplicate_queues(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [[10, "2026-05-25", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+        create_master_queue(state)
+
+        self.assertEqual(2, self._count("tbl_queue"))
+        self.assertEqual(
+            0,
+            state["runtime_config"]["queue_creation_summary"]["eligible_input_count"],
+        )
+
+    def test_configured_eligible_status_is_used_for_input_and_queue(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [[10, "2026-05-25", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        state["config"]["queue_config"]["eligible_status"] = "Ready for Bot"
+
+        create_master_queue(state)
+
+        input_status = self.db.connection.execute(
+            "SELECT Status FROM tbl_input"
+        ).fetchone()["Status"]
+        queue_statuses = self.db.connection.execute(
+            "SELECT Processing_Status FROM tbl_queue ORDER BY ID"
+        ).fetchall()
+        self.assertEqual("Ready for Bot", input_status)
+        self.assertEqual(
+            ["Ready for Bot", "Ready for Bot"],
+            [row["Processing_Status"] for row in queue_statuses],
+        )
+
+    def test_invalid_key_step_application_fails_before_input_writes(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [[10, "2026-05-25", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        state["key_steps"] = self._key_steps([(1, 999)])
+
+        create_master_queue(state)
+
+        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+        self.assertIn("999", state["runtime_config"]["last_error"])
+        self.assertEqual(0, self._count("tbl_input"))
+        self.assertEqual(0, self._count("tbl_queue"))
+
+    def test_blank_nonnumeric_and_nonpositive_key_step_applications_fail(self) -> None:
+        for application in (None, "not-an-id", 0, -1, 13.5):
+            with self.subTest(application=application):
+                workbook_path = self._write_excel(
+                    ["Processor", "Chargeback_Date", "Case_ID"],
+                    [[10, "2026-05-25", "CASE-1"]],
+                )
+                state = self._state(queue_file=workbook_path.name)
+                state["key_steps"] = self._key_steps([(1, application)])
+
+                create_master_queue(state)
+
+                self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+                self.assertIn("Application", state["runtime_config"]["last_error"])
+                self.assertEqual(0, self._count("tbl_input"))
+                self.assertEqual(0, self._count("tbl_queue"))
+
+    def test_missing_process_key_steps_fails_before_input_writes(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [[10, "2026-05-25", "CASE-1"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        state["key_steps"] = pd.DataFrame(
+            [{"Sequence": 1, "State": "FRAMEWORK_INIT", "Application": 13}]
+        )
+
+        create_master_queue(state)
+
+        self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
+        self.assertIn("no PROCESS_TRANSACTION", state["runtime_config"]["last_error"])
+        self.assertEqual(0, self._count("tbl_input"))
+
+    def test_queue_insert_failure_rolls_back_input_set_and_continues(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID"],
+            [
+                [10, "2026-05-25", "CASE-1"],
+                [10, "2026-05-25", "CASE-2"],
+            ],
+        )
+        self.db.connection.execute(
+            """
+            CREATE TRIGGER fail_second_application_for_first_input
+            BEFORE INSERT ON tbl_queue
+            WHEN NEW.Case_Details = 1 AND NEW.Application_Details = 14
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated queue failure');
+            END
+            """
+        )
+        self.db.connection.commit()
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+
+        summary = state["runtime_config"]["queue_creation_summary"]
+        first_input = self.db.connection.execute(
+            "SELECT Status, QueueCreation_timestamp FROM tbl_input WHERE ID = 1"
+        ).fetchone()
+        second_input = self.db.connection.execute(
+            "SELECT Status, QueueCreation_timestamp FROM tbl_input WHERE ID = 2"
+        ).fetchone()
+        queue_rows = self.db.connection.execute(
+            "SELECT Case_Details, Application_Details FROM tbl_queue ORDER BY ID"
+        ).fetchall()
+        self.assertIsNone(first_input["Status"])
+        self.assertIsNone(first_input["QueueCreation_timestamp"])
+        self.assertEqual("Queue Created", second_input["Status"])
+        self.assertIsNotNone(second_input["QueueCreation_timestamp"])
+        self.assertEqual([(2, 13), (2, 14)], [tuple(row) for row in queue_rows])
+        self.assertEqual(1, summary["queued_input_count"])
+        self.assertEqual(2, summary["created_queue_count"])
+        self.assertEqual(1, summary["failed_input_count"])
+        self.assertEqual(1, summary["failed_inputs"][0]["input_id"])
+        self.assertIn("simulated queue failure", summary["failed_inputs"][0]["error"])
 
     def test_tbl_input_columns_query_returns_usable_sqlite_columns(self) -> None:
         rows = self.db.connection.execute(self.db.queries["tbl_input_columns"]).fetchall()
@@ -307,6 +529,18 @@ class ExcelMasterQueueTests(unittest.TestCase):
         try:
             connection.execute(
                 """
+                CREATE TABLE tbl_application (
+                    ID INTEGER PRIMARY KEY,
+                    App_Name TEXT
+                )
+                """
+            )
+            connection.executemany(
+                "INSERT INTO tbl_application (ID, App_Name) VALUES (?, ?)",
+                [(10, "Legacy"), (13, "Chase"), (14, "Wells Fargo"), (15, "Amex")],
+            )
+            connection.execute(
+                """
                 CREATE TABLE tbl_input (
                     ID INTEGER PRIMARY KEY AUTOINCREMENT,
                     Processor INTEGER NOT NULL,
@@ -401,8 +635,25 @@ class ExcelMasterQueueTests(unittest.TestCase):
             },
             "runtime_config": {},
             "queue_db": self.db,
+            "key_steps": self._key_steps([(1, 13), (2, 14), (3, 13)]),
             "logs": [],
         }
+
+    def _key_steps(self, sequence_applications: list[tuple[object, object]]) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "Sequence": sequence,
+                    "Bot": None,
+                    "State": "PROCESS_TRANSACTION",
+                    "BatchCount": None,
+                    "Application": application,
+                    "Moduel": None,
+                    "Status": None,
+                }
+                for sequence, application in sequence_applications
+            ]
+        )
 
     def _count(self, table: str) -> int:
         row = self.db.connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
@@ -433,6 +684,25 @@ class ExcelMasterQueueTests(unittest.TestCase):
         )
         self.db.connection.commit()
         return input_id
+
+    def _insert_input(self, process: int, case_id: str, status: str | None) -> int:
+        cursor = self.db.connection.execute(
+            """
+            INSERT INTO tbl_input (
+                Processor,
+                Process,
+                Chargeback_Date,
+                Case_Json,
+                Case_ID,
+                Status,
+                Input_Identifier
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [10, process, "2026-05-25", "{}", case_id, status, f"{process}_{case_id}"],
+        )
+        self.db.connection.commit()
+        return int(cursor.lastrowid)
 
 
 if __name__ == "__main__":

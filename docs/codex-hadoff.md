@@ -1049,3 +1049,68 @@ Open schema caveat:
 - Process runtime may update `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
 - `transition_hub` should write configured final success/fail/skip statuses and set `ProcessingEND_timestamp`.
 - Status text should be configurable so production names can be matched exactly; `In Processing` is the confirmed in-progress value.
+
+## 2026-08-03 Distinct-Application Queue Creation
+
+Implemented master queue generation after input loading.
+
+KeyStep contract:
+
+- Read KeySteps from `state["key_steps"]`.
+- Select rows whose trimmed, case-insensitive `State` is `PROCESS_TRANSACTION`.
+- Sort by numeric `Sequence`, using workbook order for ties.
+- Normalize `Application` values as positive integer `tbl_application.ID` values.
+- Deduplicate normalized application IDs while preserving their first sequenced occurrence.
+- Validate every distinct ID against `tbl_application` before inserting inputs or queues.
+- Missing process rows, invalid application values, or nonexistent application IDs are configuration failures and route the master queue creator to `END` before writes.
+
+Eligible input contract:
+
+- Select all `tbl_input` rows whose `Process` matches `process_config.Process_ID`.
+- Accept only null, empty, or whitespace `Status` values.
+- Include both newly imported and previously existing eligible inputs.
+- Process eligible inputs in ID order.
+
+Per-input transaction:
+
+- Insert one `tbl_queue` row for each distinct process application.
+- Set `Case_Details` to the input ID, `Application_Details` to the KeyStep application ID, and `Processing_Status` to `queue_config.eligible_status` (default `Queue Created`).
+- Leave `Bot_Name` empty until `get_transaction` assigns the processing bot.
+- After the complete queue set succeeds, update the input to the same status and set `QueueCreation_timestamp = CURRENT_TIMESTAMP`.
+- Commit the queue set and input update together.
+- If any operation fails, roll back the complete set for that input, leave it eligible for retry, record the failure, and continue with later inputs.
+
+Runtime reporting:
+
+```python
+runtime_config["queue_creation_summary"] = {
+    "distinct_application_count": 2,
+    "eligible_input_count": 3,
+    "queued_input_count": 3,
+    "created_queue_count": 6,
+    "failed_input_count": 0,
+    "failed_inputs": [],
+}
+```
+
+Database changes:
+
+- Added matching SQLite and MySQL named queries for application validation, eligible-input selection, queue insertion, and input status/timestamp updates.
+- Existing transaction fetching and final status updates continue to use the same queue adapter boundary.
+
+Verification:
+
+```powershell
+python -m pytest -q
+python -m py_compile framework/runtime/queue_runtime.py
+git diff --check
+```
+
+Result:
+
+- `27 passed`.
+- Runtime compilation and diff validation passed.
+
+Operational note:
+
+- The saved `KeySteps.xlsx` must contain valid numeric application IDs on its `PROCESS_TRANSACTION` rows before master queue creation can run successfully.

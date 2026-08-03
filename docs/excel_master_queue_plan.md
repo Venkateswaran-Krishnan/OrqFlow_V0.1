@@ -2,7 +2,7 @@
 
 ## Summary
 
-When the bot is a master bot, `master_queue_creator` loads the configured source into a canonical input DataFrame, validates it against `tbl_input`, and inserts valid rows into `tbl_input` only. DB adapter initialization already belongs to `framework_init`; this plan reuses `state["queue_db"]`.
+When the bot is a master bot, `master_queue_creator` loads the configured source into a canonical input DataFrame, inserts valid rows into `tbl_input`, and creates the complete application queue set for every eligible input. DB adapter initialization already belongs to `framework_init`; this behavior reuses `state["queue_db"]`.
 
 ## Trigger Conditions
 
@@ -36,7 +36,12 @@ Supported source adapters:
 - Use the already initialized DB adapter:
   - `db = state["queue_db"]`
   - Do not create a new DB connection inside master queue creator.
-  - Do not insert into `tbl_queue`.
+- Read `state["key_steps"]` before input writes:
+  - Select rows whose normalized `State` is `PROCESS_TRANSACTION`.
+  - Sort by numeric `Sequence`, preserving workbook order for ties.
+  - Normalize `Application` as a positive integer `tbl_application.ID`.
+  - Deduplicate application IDs while preserving their first sequenced occurrence.
+  - Validate all distinct IDs against `tbl_application` before inserting inputs.
 
 ## Input DataFrame Validation Rules
 
@@ -69,12 +74,23 @@ Supported source adapters:
   - Continue with the next row.
   - Keep earlier committed rows.
 - If a row is missing a required value, skip that row and record the reason.
-- `tbl_input.Status` remains empty/null during this phase.
-- Do not insert into `tbl_queue`; separate queue-table logic will handle that later.
+- Newly inserted inputs initially retain an empty/null `Status` and are then included in queue creation.
+
+## Queue Creation Behavior
+
+- Select every `tbl_input` row whose `Process` matches `process_config.Process_ID` and whose `Status` is null, empty, or whitespace.
+- For each eligible input, insert one `tbl_queue` row per distinct process application:
+  - `Case_Details` is the input ID.
+  - `Application_Details` is the KeyStep application ID.
+  - `Processing_Status` is `queue_config.eligible_status`, defaulting to `Queue Created`.
+- After the complete queue set succeeds, update the input to the same status and set `QueueCreation_timestamp = CURRENT_TIMESTAMP`.
+- Commit the complete queue set and input update as one transaction per input.
+- If any queue insert or the input update fails, roll back that input's complete queue set, leave it eligible for retry, record the failure, and continue with later inputs.
+- Store aggregate results in `runtime_config.queue_creation_summary`.
 
 ## Error Behavior
 
-- Missing `QueueFileLocation`, missing Excel file, unsupported source, unconfigured API source, missing required source fields, missing `state["queue_db"]`, or missing `process_config.Process_ID` should set runtime failure state and prevent moving to `get_transaction`.
+- Missing `QueueFileLocation`, missing Excel file, unsupported source, unconfigured API source, missing required source fields, missing/invalid process KeySteps, nonexistent application IDs, missing `state["queue_db"]`, or missing `process_config.Process_ID` should set runtime failure state and prevent moving to `get_transaction`.
 - Row-level missing values or duplicate insert failures should not fail the whole load; they should be recorded in the insert summary.
 - The graph should route to `end` or stop cleanly after failure instead of continuing transaction fetch.
 
@@ -94,5 +110,9 @@ Supported source adapters:
 - Duplicate `Input_Identifier` is rejected by DB on that row and the load continues.
 - Earlier rows remain committed after a later row fails.
 - Later valid rows are still inserted after a failed row.
-- `tbl_input.Status` stays empty/null.
-- No rows are inserted into `tbl_queue`.
+- Duplicate KeyStep applications create only one queue row per input.
+- Distinct applications retain the order of their first sequenced KeyStep.
+- Inputs for other processes or with populated statuses are ignored.
+- Each successfully queued input receives the configured status and queue creation timestamp.
+- A queue failure rolls back the complete queue set for that input and does not prevent later inputs from being queued.
+- Rerunning master queue creation does not duplicate queues for inputs already marked queue-created.

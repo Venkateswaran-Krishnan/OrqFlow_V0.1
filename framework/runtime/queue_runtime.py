@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -71,12 +72,27 @@ def create_master_queue(state: OrqflowState) -> OrqflowState:
 
     try:
         dataframe = _load_input_dataframe(state)
-        summary = _insert_input_dataframe(state, dataframe)
-        state["runtime_config"]["input_load_summary"] = summary
+        process_id = _process_id(state)
+        application_ids = _extract_distinct_process_applications(state)
+        db = _active_queue_db(state)
+        _validate_application_ids(db, application_ids)
+
+        input_summary = _insert_input_dataframe(state, dataframe)
+        queue_summary = _create_queues_for_eligible_inputs(
+            state,
+            process_id,
+            application_ids,
+        )
+        state["runtime_config"]["input_load_summary"] = input_summary
+        state["runtime_config"]["queue_creation_summary"] = queue_summary
         logger.info(
-            "Input loaded. Rows inserted into tbl_input: %s, failed/skipped rows: %s",
-            summary["inserted_count"],
-            summary["failed_count"],
+            "Master queue created. Inputs inserted: %s, input rows failed/skipped: %s, "
+            "inputs queued: %s, queue rows created: %s, queue inputs failed: %s",
+            input_summary["inserted_count"],
+            input_summary["failed_count"],
+            queue_summary["queued_input_count"],
+            queue_summary["created_queue_count"],
+            queue_summary["failed_input_count"],
         )
     except Exception as error:
         logger.exception("Master queue input loading failed")
@@ -190,9 +206,7 @@ def _load_api_dataframe(state: OrqflowState) -> Any:
 
 def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, Any]:
     process_id = _process_id(state)
-    db = state.get("queue_db")
-    if db is None or getattr(db, "connection", None) is None:
-        raise ValueError("state['queue_db'] with an active connection is required")
+    db = _active_queue_db(state)
 
     db_schema = _tbl_input_schema(db)
     db_columns = set(db_schema)
@@ -262,6 +276,169 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         summary["inserted_input_ids"].append(cursor.lastrowid)
 
     return summary
+
+
+def _extract_distinct_process_applications(state: OrqflowState) -> list[int]:
+    dataframe = state.get("key_steps")
+    if dataframe is None:
+        raise ValueError("state['key_steps'] is required for master queue creation")
+
+    required_columns = {"State", "Sequence", "Application"}
+    missing_columns = required_columns.difference(dataframe.columns)
+    if missing_columns:
+        raise ValueError(
+            "KeySteps missing required column(s): " + ", ".join(sorted(missing_columns))
+        )
+
+    process_rows: list[tuple[Decimal, int, int]] = []
+    for workbook_order, (_, row) in enumerate(dataframe.iterrows()):
+        state_name = str(_normalize_db_value(row["State"]) or "").strip().upper()
+        if state_name != "PROCESS_TRANSACTION":
+            continue
+
+        sequence = _numeric_key_step_value(row["Sequence"], "Sequence", workbook_order + 2)
+        application = _positive_application_id(row["Application"], workbook_order + 2)
+        process_rows.append((sequence, workbook_order, application))
+
+    if not process_rows:
+        raise ValueError("KeySteps has no PROCESS_TRANSACTION rows")
+
+    process_rows.sort(key=lambda item: (item[0], item[1]))
+    distinct_applications: list[int] = []
+    seen: set[int] = set()
+    for _, _, application in process_rows:
+        if application not in seen:
+            seen.add(application)
+            distinct_applications.append(application)
+    return distinct_applications
+
+
+def _numeric_key_step_value(value: Any, column: str, excel_row: int) -> Decimal:
+    normalized = _normalize_db_value(value)
+    if normalized is None or isinstance(normalized, bool):
+        raise ValueError(f"KeySteps row {excel_row} has invalid {column}: {value!r}")
+    try:
+        number = Decimal(str(normalized).strip())
+    except (InvalidOperation, ValueError):
+        raise ValueError(
+            f"KeySteps row {excel_row} has invalid {column}: {value!r}"
+        ) from None
+    if not number.is_finite():
+        raise ValueError(f"KeySteps row {excel_row} has invalid {column}: {value!r}")
+    return number
+
+
+def _positive_application_id(value: Any, excel_row: int) -> int:
+    number = _numeric_key_step_value(value, "Application", excel_row)
+    if number != number.to_integral_value() or number <= 0:
+        raise ValueError(
+            f"KeySteps row {excel_row} has invalid Application: {value!r}; "
+            "expected a positive integer tbl_application.ID"
+        )
+    return int(number)
+
+
+def _validate_application_ids(db: Any, application_ids: list[int]) -> None:
+    rows = db.connection.execute(db.queries["select_application_ids"]).fetchall()
+    valid_ids = {int(_row_value(row, "ID", 0)) for row in rows}
+    missing_ids = [
+        application_id
+        for application_id in application_ids
+        if application_id not in valid_ids
+    ]
+    if missing_ids:
+        raise ValueError(
+            "KeySteps Application ID(s) not found in tbl_application: "
+            + ", ".join(str(value) for value in missing_ids)
+        )
+
+
+def _select_eligible_inputs(state: OrqflowState, process_id: str) -> list[Any]:
+    db = _active_queue_db(state)
+    return db.connection.execute(
+        db.queries["select_inputs_for_queue_creation"],
+        [process_id],
+    ).fetchall()
+
+
+def _create_queue_set_for_input(
+    state: OrqflowState,
+    input_id: int,
+    process_id: str,
+    application_ids: list[int],
+    queue_status: str,
+) -> int:
+    db = _active_queue_db(state)
+    for application_id in application_ids:
+        db.connection.execute(
+            db.queries["insert_tbl_queue"],
+            [input_id, application_id, queue_status],
+        )
+
+    cursor = db.connection.execute(
+        db.queries["mark_input_queue_created"],
+        [queue_status, input_id, process_id],
+    )
+    if cursor.rowcount != 1:
+        raise RuntimeError(
+            f"Expected to mark one tbl_input row as queue created for input ID {input_id}; "
+            f"updated {cursor.rowcount}"
+        )
+    db.connection.commit()
+    return len(application_ids)
+
+
+def _create_queues_for_eligible_inputs(
+    state: OrqflowState,
+    process_id: str,
+    application_ids: list[int],
+) -> dict[str, Any]:
+    db = _active_queue_db(state)
+    eligible_inputs = _select_eligible_inputs(state, process_id)
+    summary: dict[str, Any] = {
+        "distinct_application_count": len(application_ids),
+        "eligible_input_count": len(eligible_inputs),
+        "queued_input_count": 0,
+        "created_queue_count": 0,
+        "failed_input_count": 0,
+        "failed_inputs": [],
+    }
+    queue_status = _queue_config(state)["eligible_status"]
+
+    for row in eligible_inputs:
+        input_id = int(_row_value(row, "ID", 0))
+        try:
+            created_count = _create_queue_set_for_input(
+                state,
+                input_id,
+                process_id,
+                application_ids,
+                queue_status,
+            )
+        except Exception as error:
+            db.connection.rollback()
+            summary["failed_input_count"] += 1
+            summary["failed_inputs"].append({"input_id": input_id, "error": str(error)})
+            continue
+        summary["queued_input_count"] += 1
+        summary["created_queue_count"] += created_count
+
+    return summary
+
+
+def _active_queue_db(state: OrqflowState) -> Any:
+    db = state.get("queue_db")
+    if db is None or getattr(db, "connection", None) is None:
+        raise ValueError("state['queue_db'] with an active connection is required")
+    return db
+
+
+def _row_value(row: Any, name: str, index: int) -> Any:
+    if hasattr(row, "keys"):
+        return row[name]
+    if isinstance(row, dict):
+        return row[name]
+    return row[index]
 
 
 def _tbl_input_columns(db: Any) -> set[str]:

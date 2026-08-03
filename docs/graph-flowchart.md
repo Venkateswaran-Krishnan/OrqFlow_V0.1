@@ -4,7 +4,7 @@
 flowchart TD
     A[framework_init<br/>load KeySteps.xlsx] --> B[execution_init]
 
-    B -->|masterbot = true| C[master_queue_creator]
+    B -->|masterbot = true| C[master_queue_creator<br/>load inputs and create queues]
     B -->|masterbot != true| D[get_transaction]
 
     C --> D
@@ -21,6 +21,33 @@ flowchart TD
 
     G --> H([LangGraph END])
 ```
+
+## Master Queue Creation
+
+```mermaid
+flowchart TD
+    A[Load input DataFrame] --> B[Select PROCESS_TRANSACTION KeySteps]
+    B --> C[Sort by Sequence]
+    C --> D[Normalize and deduplicate Application IDs]
+    D --> E[Validate IDs against tbl_application]
+    E --> F[Insert valid source rows into tbl_input]
+    F --> G[Select matching-process inputs with blank Status]
+    G --> H{Next eligible input}
+    H -->|Found| I[Insert one tbl_queue row per distinct application]
+    I --> J{Complete queue set succeeded?}
+    J -->|Yes| K[Update input Status and QueueCreation_timestamp]
+    K --> L[Commit input queue set]
+    J -->|No| M[Rollback this input queue set and record failure]
+    L --> H
+    M --> H
+    H -->|None| N[Store queue_creation_summary]
+```
+
+- `Case_Details` stores the eligible `tbl_input.ID` and `Application_Details` stores the normalized KeyStep application ID.
+- Both `tbl_queue.Processing_Status` and the completed `tbl_input.Status` use `queue_config.eligible_status`, defaulting to `Queue Created`.
+- The input status and timestamp are updated only after its complete distinct-application queue set succeeds.
+- A failed input is rolled back independently and remains eligible for a later retry; later inputs continue processing.
+- Queue creation assumes one master creator per process. Successfully updated input status prevents duplicates on normal reruns.
 
 ## Framework Initialization Notes
 
