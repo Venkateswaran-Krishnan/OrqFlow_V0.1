@@ -53,19 +53,22 @@ Configures logging, rotating file logs, console output, and trace events.
 ## Runtime
 
 `framework/runtime/framework_lifecycle.py`  
-Framework startup behavior. Currently initializes the in-memory queue.
+Framework startup behavior. Loads `KeySteps.xlsx` and initializes the configured queue database adapter. Initialization failures set `SYSTEM_EXCEPTION` and route safely to `END`.
 
 `framework/runtime/application_runtime.py`  
 Application login behavior. Skips login after it has already completed for the current execution.
 
 `framework/runtime/queue_runtime.py`  
-Queue behavior: in-memory queue placeholder, fetch next transaction, wait handling, and batch count.
+Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment.
+
+`framework/runtime/process_runtime.py`
+Selects the active application's `PROCESS_TRANSACTION` row from `KeySteps.xlsx`, imports the configured `package.module:function`, executes it, validates its result, and maps failures to framework outcomes.
 
 `framework/runtime/transition_runtime.py`  
 Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end.
 
 `framework/runtime/cleanup_runtime.py`  
-End behavior placeholder.
+Stops the browser driver, closes the queue database connection, and logs cleanup progress.
 
 `framework/runtime/__init__.py`  
 Marks the runtime package.
@@ -84,13 +87,20 @@ Reads Excel worksheets in read-only mode and returns `pandas.DataFrame` objects 
 `share/config/`  
 Repo-local shared config model, including global config, project config, app modules, bot config, and input files.
 
-## Removed During Cleanup
+## Tests
+
+`tests/test_excel_master_queue.py`
+Covers input loading, queue creation, database status updates, transaction fetching, and queue failure behavior.
+
+`tests/test_process_runtime.py`
+Covers configured process-module execution, returned results, missing application configuration, module exceptions, and exception-message logging.
+
+## Removed During Earlier Cleanup
 
 The project was cleaned back to graph/config foundation. The following experimental areas were intentionally removed:
 
 - `apps/`
 - `examples/`
-- `tests/`
 - `framework/adapters.py`
 - `framework/runtime_loader.py`
 - `framework/steps.py`

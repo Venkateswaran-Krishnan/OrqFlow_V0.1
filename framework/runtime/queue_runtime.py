@@ -55,6 +55,7 @@ class DatabaseQueue:
     def _mark_final(self, txn: dict, query_name: str, status: str, reason: str | None) -> None:
         if txn is None:
             return
+        logger = get_logger("runtime.queue")
         self.db.connection.execute(
             self.db.queries[query_name],
             [status, reason, reason, reason, reason, txn["queue_id"]],
@@ -62,11 +63,19 @@ class DatabaseQueue:
         self.db.connection.commit()
         txn["queue_processing_status"] = status
         txn["queue_bot_comment"] = reason
+        logger.info("Queue transaction status updated")
+        logger.debug(
+            "Queue transaction status details: queue_id=%s, status=%s, reason=%s",
+            txn["queue_id"],
+            status,
+            reason,
+        )
 
 
 def create_master_queue(state: OrqflowState) -> OrqflowState:
     logger = get_logger("runtime.queue")
     if not _is_master_queue_enabled(state):
+        logger.info("Master queue creation skipped; masterbot is disabled")
         logger.debug("Master queue loading skipped")
         return state
 
@@ -85,7 +94,8 @@ def create_master_queue(state: OrqflowState) -> OrqflowState:
         )
         state["runtime_config"]["input_load_summary"] = input_summary
         state["runtime_config"]["queue_creation_summary"] = queue_summary
-        logger.info(
+        logger.info("Master queue creation completed")
+        logger.debug(
             "Master queue created. Inputs inserted: %s, input rows failed/skipped: %s, "
             "inputs queued: %s, queue rows created: %s, queue inputs failed: %s",
             input_summary["inserted_count"],
@@ -93,6 +103,11 @@ def create_master_queue(state: OrqflowState) -> OrqflowState:
             queue_summary["queued_input_count"],
             queue_summary["created_queue_count"],
             queue_summary["failed_input_count"],
+        )
+        logger.debug(
+            "Master queue summaries: input_summary=%s, queue_summary=%s",
+            input_summary,
+            queue_summary,
         )
     except Exception as error:
         logger.exception("Master queue input loading failed")
@@ -118,6 +133,7 @@ def get_next_transaction(state: OrqflowState) -> OrqflowState:
         runtime["txn"] = None
         runtime["last_status"] = Outcome.NO_TRANSACTION
         runtime["next_action"] = None
+        logger.info("No transaction available")
         logger.debug("No transaction available. Runtime: %s", runtime)
         return state
 
@@ -127,7 +143,13 @@ def get_next_transaction(state: OrqflowState) -> OrqflowState:
     runtime["last_status"] = Outcome.SUCCESS
     runtime["last_error"] = None
     runtime["next_action"] = "PROCESS"
-    logger.debug("Transaction fetched: %s", txn)
+    logger.info("Transaction fetched and marked in progress")
+    logger.debug(
+        "Transaction details: queue_id=%s, input_id=%s, application_id=%s",
+        txn.get("queue_id"),
+        txn.get("input_id"),
+        txn.get("queue_application_details"),
+    )
     return state
 
 
@@ -207,6 +229,7 @@ def _load_api_dataframe(state: OrqflowState) -> Any:
 def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, Any]:
     process_id = _process_id(state)
     db = _active_queue_db(state)
+    logger = get_logger("runtime.queue")
 
     db_schema = _tbl_input_schema(db)
     db_columns = set(db_schema)
@@ -251,6 +274,12 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         if row_error is not None:
             summary["failed_rows"].append({"row": excel_row_number, "error": row_error})
             summary["failed_count"] += 1
+            logger.warning("Input row rejected during validation")
+            logger.debug(
+                "Input row validation failure: row=%s, error=%s",
+                excel_row_number,
+                row_error,
+            )
             continue
 
         values = []
@@ -271,6 +300,12 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
                 {"row": excel_row_number, "error": f"DB insert failed: {error}"}
             )
             summary["failed_count"] += 1
+            logger.error("Input row database insert failed", exc_info=True)
+            logger.debug(
+                "Input row database failure: row=%s, error=%s",
+                excel_row_number,
+                error,
+            )
             continue
         summary["inserted_count"] += 1
         summary["inserted_input_ids"].append(cursor.lastrowid)
@@ -394,6 +429,7 @@ def _create_queues_for_eligible_inputs(
     application_ids: list[int],
 ) -> dict[str, Any]:
     db = _active_queue_db(state)
+    logger = get_logger("runtime.queue")
     eligible_inputs = _select_eligible_inputs(state, process_id)
     summary: dict[str, Any] = {
         "distinct_application_count": len(application_ids),
@@ -419,6 +455,12 @@ def _create_queues_for_eligible_inputs(
             db.connection.rollback()
             summary["failed_input_count"] += 1
             summary["failed_inputs"].append({"input_id": input_id, "error": str(error)})
+            logger.error("Queue creation failed for an input", exc_info=True)
+            logger.debug(
+                "Queue creation failure: input_id=%s, error=%s",
+                input_id,
+                error,
+            )
             continue
         summary["queued_input_count"] += 1
         summary["created_queue_count"] += created_count

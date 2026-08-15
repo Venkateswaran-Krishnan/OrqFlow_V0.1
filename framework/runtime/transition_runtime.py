@@ -12,11 +12,16 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
     outcome = Outcome(runtime["last_status"])
     txn = runtime.get("txn")
     requested_action = runtime.get("next_action")
-    get_logger("runtime.transition").debug(
-        "Transition input. Outcome: %s, txn: %s, runtime: %s",
+    logger = get_logger("runtime.transition")
+    logger.debug(
+        "Transition input: outcome=%s, queue_id=%s, retry_count=%s, "
+        "batch_count=%s, wait_count=%s, requested_action=%s",
         outcome,
-        txn,
-        runtime,
+        txn.get("queue_id") if isinstance(txn, dict) else None,
+        runtime.get("retry_count"),
+        runtime.get("batch_count"),
+        runtime.get("wait_count"),
+        requested_action,
     )
 
     if requested_action == "APP_SWITCH":
@@ -24,6 +29,7 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
         runtime["retry_count"] = 0
         runtime["txn"] = None
         runtime["next_action"] = "APP_SWITCH"
+        logger.info("Application-switch transition selected")
         return state
 
     if outcome == Outcome.SUCCESS:
@@ -31,6 +37,7 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
         runtime["retry_count"] = 0
         runtime["txn"] = None
         runtime["next_action"] = next_after_success(state)
+        logger.info("Successful transaction transition completed")
         return state
 
     if outcome == Outcome.BUSINESS_EXCEPTION:
@@ -38,18 +45,27 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
         runtime["retry_count"] = 0
         runtime["txn"] = None
         runtime["next_action"] = next_after_success(state)
+        logger.info("Business-exception transaction transition completed")
         return state
 
     if outcome == Outcome.SYSTEM_EXCEPTION:
         if runtime.get("retry_count", 0) < _execution_config(state).get("retry_limit", 0):
             runtime["retry_count"] = runtime.get("retry_count", 0) + 1
             runtime["next_action"] = "RETRY"
+            logger.info("System-exception retry selected")
             return state
-        if txn is not None:
-            state["queue"].mark_failed(txn, runtime.get("last_error"))
+
+        if txn is None:
+            runtime["retry_count"] = 0
+            runtime["next_action"] = "END"
+            logger.info("System-exception transition ended without an active transaction")
+            return state
+
+        state["queue"].mark_failed(txn, runtime.get("last_error"))
         runtime["retry_count"] = 0
         runtime["txn"] = None
         runtime["next_action"] = next_after_success(state)
+        logger.info("Failed transaction transition completed")
         return state
 
     if outcome == Outcome.NO_TRANSACTION:
@@ -58,7 +74,8 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
             runtime["wait_count"] = runtime.get("wait_count", 0) + 1
             runtime["next_action"] = "GET_TRANSACTION"
             wait_seconds = _execution_config(state).get("wait_seconds", 0)
-            get_logger("runtime.transition").debug(
+            logger.info("No-transaction wait selected")
+            logger.debug(
                 "No transaction found. Waiting %s seconds. Runtime: %s",
                 wait_seconds,
                 runtime,
@@ -68,9 +85,11 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
             return state
 
         runtime["next_action"] = "END"
+        logger.info("No-transaction transition ended")
         return state
 
     runtime["next_action"] = "END"
+    logger.info("Transition ended")
     return state
 
 

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from framework.logging_config import get_logger, trace_event
+from framework.logging_config import trace_event
 from framework.results import Outcome
 from framework.runtime.cleanup_runtime import cleanup_execution
 from framework.runtime.application_runtime import login_application as login_application_runtime
 from framework.runtime.framework_lifecycle import initialize_framework
+from framework.runtime.process_runtime import execute_process_transaction
 from framework.runtime.queue_runtime import create_master_queue, get_next_transaction
 from framework.runtime.transition_runtime import resolve_transition
 from framework.state import OrqflowState
@@ -39,14 +40,7 @@ def login_application(state: OrqflowState) -> OrqflowState:
 
 def process_transaction(state: OrqflowState) -> OrqflowState:
     _log(state, "NODE:PROCESS_TRANSACTION")
-    runtime = state["runtime_config"]
-    runtime["last_status"] = Outcome.SUCCESS
-    runtime["last_error"] = None
-    runtime["next_action"] = None
-    if runtime.get("first_run"):
-        runtime["first_run"] = False
-        get_logger("nodes").info("First run completed; runtime first_run marked false")
-    return state
+    return execute_process_transaction(state)
 
 
 def transition_hub(state: OrqflowState) -> OrqflowState:
@@ -59,6 +53,12 @@ def transition_hub(state: OrqflowState) -> OrqflowState:
 def end(state: OrqflowState) -> OrqflowState:
     _log(state, "NODE:END")
     return cleanup_execution(state)
+
+
+def route_after_framework_init(state: OrqflowState) -> Literal["execution_init", "end"]:
+    if state["runtime_config"].get("next_action") == "END":
+        return "end"
+    return "execution_init"
 
 
 def route_after_get(state: OrqflowState) -> Literal["login_application", "transition_hub"]:

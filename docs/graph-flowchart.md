@@ -2,21 +2,24 @@
 
 ```mermaid
 flowchart TD
-    A[framework_init<br/>load KeySteps.xlsx] --> B[execution_init]
+    A[framework_init<br/>load KeySteps.xlsx and initialize queue DB] -->|success| B[execution_init]
+    A -->|initialization failure<br/>next_action = END| G[end and cleanup]
 
     B -->|masterbot = true| C[master_queue_creator<br/>load inputs and create queues]
     B -->|masterbot != true| D[get_transaction]
 
-    C --> D
+    C -->|queue creation completed| D
+    C -->|queue creation failure<br/>next_action = END| G
 
     D -->|next_action = PROCESS| E[login_application]
     D -->|no transaction| F[transition_hub]
 
-    E -->|already logged in or login completed| I[process_transaction]
+    E -->|already logged in or login completed| I[process_transaction<br/>load Module from matching KeySteps row]
     I --> F[transition_hub]
 
     F -->|next_action = APP_SWITCH or RETRY| B
     F -->|next_action = GET_TRANSACTION or default| D
+    F -->|system exception with no active transaction<br/>retries exhausted| G
     F -->|next_action = END| G
 
     G --> H([LangGraph END])
@@ -55,3 +58,13 @@ flowchart TD
 - The shared Excel reader is loaded from `<share_root>/common/excel.py` using the config context resolved during startup.
 - Loaded key-step data is stored on `state["key_steps"]` for later runtime nodes.
 - If loading fails, framework initialization records `Outcome.SYSTEM_EXCEPTION`, stores the error in `runtime_config.last_error`, and sets `runtime_config.next_action` to `END`.
+- The graph honors that `END` action immediately; failed framework initialization does not continue to `execution_init`.
+
+## Process Transaction Notes
+
+- The active transaction provides `queue_application_details`, which identifies its application.
+- The framework selects the matching `PROCESS_TRANSACTION` row from `KeySteps.xlsx` and orders matching rows by numeric `Sequence`.
+- The `Module` cell uses `package.module:function` format, for example `image_value_extraction.runtime:run_process`.
+- The configured callable receives the complete shared state and returns a framework result containing `outcome`, optional `message`, optional `data`, and optional `next_action`.
+- Unexpected import, configuration, execution, or result-validation failures become `Outcome.SYSTEM_EXCEPTION`.
+- After retry exhaustion, a system exception without an active transaction routes to `END` instead of returning repeatedly to `GET_TRANSACTION`.

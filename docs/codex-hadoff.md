@@ -987,7 +987,7 @@ Current workbook check:
 ```text
 share/config/orqflow_v0_1/KeySteps.xlsx
 shape: (1, 7)
-columns: Sequence, Bot, State, BatchCount, Application, Moduel, Status
+columns: Sequence, Bot, State, BatchCount, Application, Module, Status
 ```
 
 Current state shape:
@@ -1114,3 +1114,36 @@ Result:
 Operational note:
 
 - The saved `KeySteps.xlsx` must contain valid numeric application IDs on its `PROCESS_TRANSACTION` rows before master queue creation can run successfully.
+
+## 2026-08-15 Process Runtime, Routing, and Logging Update
+
+Framework routing:
+
+- `framework_init` now routes conditionally: successful initialization continues to `execution_init`; initialization failure with `next_action = END` routes directly to cleanup and graph end.
+- A `SYSTEM_EXCEPTION` retries according to `execution_config.retry_limit`.
+- When retries are exhausted and there is no active transaction, `transition_hub` routes to `END` instead of returning to `GET_TRANSACTION`.
+
+Process-module execution:
+
+- Added `framework/runtime/process_runtime.py`.
+- `PROCESS_TRANSACTION` now selects the active application's matching KeySteps row using `queue_application_details`, `State = PROCESS_TRANSACTION`, and numeric `Sequence`.
+- The KeySteps column is named `Module`.
+- `Module` uses `package.module:function` format, for example `image_value_extraction.runtime:run_process`.
+- The callable receives shared state and returns a mapping with `outcome` and optional `message`, `data`, and `next_action`.
+- The framework validates returned outcomes and converts loading, invocation, or result-contract failures into `SYSTEM_EXCEPTION`.
+
+Logging:
+
+- Every graph node records an `INFO` entry event.
+- Lifecycle and transition outcomes are logged at `INFO`.
+- Operational values are logged at `DEBUG`; the complete effective configuration was moved from `INFO` to `DEBUG`.
+- Business exceptions and rejected input rows are logged at `WARNING`.
+- Technical failures are logged at `ERROR`, and unexpected raised exceptions include their message and traceback.
+- Queue failure/skip reasons, row numbers, queue/input identifiers, module selection, and transition state are available at `DEBUG`.
+- Document contents and extracted OCR results are intentionally not logged.
+
+Verification:
+
+- Added `tests/test_process_runtime.py`.
+- Full test result after these updates: `31 tests passed`.
+- Framework and project wheels have not yet been rebuilt or redeployed.

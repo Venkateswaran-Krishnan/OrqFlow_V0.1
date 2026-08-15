@@ -14,14 +14,16 @@ def initialize_framework(state: OrqflowState) -> OrqflowState:
     logger = get_logger("runtime.framework")
     try:
         state["key_steps"] = _read_key_steps(state)
-        logger.info(
+        logger.info("KeySteps loaded")
+        logger.debug(
             "KeySteps loaded: path=%s, shape=%s, columns=%s",
             _key_steps_path(state),
             state["key_steps"].shape,
             list(state["key_steps"].columns),
         )
         state["queue_db"] = initialize_queue_db_adapter(state)
-        logger.info("Queue database initialized: %s", state["queue_db"].describe())
+        logger.info("Queue database initialized")
+        logger.debug("Queue database details: %s", state["queue_db"].describe())
     except Exception as error:
         logger.exception("Framework initialization failed")
         runtime = state["runtime_config"]

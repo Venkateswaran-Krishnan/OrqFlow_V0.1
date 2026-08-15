@@ -16,6 +16,7 @@ from framework.nodes import (
     login_application,
     master_queue_creator,
     process_transaction,
+    route_after_framework_init,
     route_after_execution_init,
     route_after_get,
     route_after_master_queue_creator,
@@ -38,7 +39,14 @@ def build_graph():
     graph.add_node("end", end)
 
     graph.set_entry_point("framework_init")
-    graph.add_edge("framework_init", "execution_init")
+    graph.add_conditional_edges(
+        "framework_init",
+        route_after_framework_init,
+        {
+            "execution_init": "execution_init",
+            "end": "end",
+        },
+    )
     graph.add_conditional_edges(
         "execution_init",
         route_after_execution_init,
@@ -99,7 +107,7 @@ def run_graph(config_path: str | Path = DEFAULT_BOOTSTRAP_PATH) -> dict[str, Any
 
 def _log_effective_config(state: dict[str, Any]) -> None:
     logger = get_logger("config")
-    logger.info(
+    logger.debug(
         "Effective config: %s",
         json.dumps(state.get("config", {}), indent=2, sort_keys=True, default=str),
     )
