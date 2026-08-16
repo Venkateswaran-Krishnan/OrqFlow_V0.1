@@ -6,6 +6,7 @@ from framework.state import OrqflowState
 
 def cleanup_execution(state: OrqflowState) -> OrqflowState:
     logger = get_logger("runtime.cleanup")
+    runtime = state["runtime_config"]
     logger.info("Execution cleanup started")
 
     driver = state.get("driver")
@@ -24,5 +25,7 @@ def cleanup_execution(state: OrqflowState) -> OrqflowState:
         queue_db.close()
         logger.info("Queue database connection closed")
 
+    runtime["next_action"] = "END"
     logger.info("Execution cleanup completed")
+    logger.debug("Execution cleanup state: next_action=%s", runtime["next_action"])
     return state

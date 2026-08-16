@@ -13,6 +13,16 @@ Run input loading only when all are true:
 
 If `masterbot` is false, skip this block completely.
 
+Schedule rules:
+
+- `masterbot: false`: never run master queue creation.
+- `masterbot: true` with blank or zero `master_queue_interval_hours`: run once per framework execution.
+- `masterbot: true` with a positive interval: run at startup and again after each elapsed interval.
+- Decimal hours are supported, for example `0.5` means 30 minutes.
+- Negative and nonnumeric intervals are configuration errors.
+- Successful runs update `runtime_config.master_queue_run_count` and the timezone-aware UTC `master_queue_last_run_at`; failed runs do not.
+- When the queue is empty before a periodic run is due, `MASTER_QUEUE_WAIT` uses a positive `execution_config.wait_seconds` polling interval.
+
 Supported source adapters:
 
 - `Excel`: reads `QueueFileLocation` through `share/common/excel.py`.
@@ -104,6 +114,9 @@ Supported source adapters:
 - `masterbot: false` skips Excel loading.
 - `masterbot: true` + `Queue: Excel` reads the Excel file.
 - `masterbot: true` + `Queue: API` uses the API adapter and reports a clear configuration error until API details are implemented.
+- Blank/zero interval permits exactly one successful master-queue run per framework execution.
+- Positive interval becomes due only after the configured elapsed time.
+- Periodic waiting rejects zero, negative, blank, or nonnumeric `wait_seconds`.
 - Missing required `Case_ID` field fails before inserts.
 - Missing required cell values skip only those rows.
 - Valid rows insert into `tbl_input`.

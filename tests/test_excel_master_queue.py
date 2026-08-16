@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +15,9 @@ from framework.runtime.queue_runtime import (
     _is_duplicate_input_error,
     create_master_queue,
     get_next_transaction,
+    is_master_queue_due,
+    master_queue_interval_hours,
+    record_master_queue_run,
 )
 
 
@@ -29,6 +34,7 @@ class SharedQueueQueryTests(unittest.TestCase):
         self.assertIn("insert_tbl_queue", queries)
         self.assertIn("select_inputs_for_queue_creation", queries)
         self.assertIn("mark_input_queue_created", queries)
+        self.assertIn("fetch_any_eligible_transaction", queries)
         self.assertEqual("PRAGMA table_info(tbl_input);", queries["tbl_input_columns"])
         self.assertEqual(
             "INSERT INTO tbl_input ({columns})\nVALUES ({placeholders});",
@@ -43,6 +49,7 @@ class SharedQueueQueryTests(unittest.TestCase):
         self.assertIn("insert_tbl_queue", queries)
         self.assertIn("select_inputs_for_queue_creation", queries)
         self.assertIn("mark_input_queue_created", queries)
+        self.assertIn("fetch_any_eligible_transaction", queries)
         self.assertEqual("SHOW COLUMNS FROM tbl_input;", queries["tbl_input_columns"])
         self.assertEqual(
             "INSERT INTO tbl_input ({columns})\nVALUES ({placeholders});",
@@ -102,6 +109,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
         self.assertIn("Case_ID", state["runtime_config"]["last_error"])
         self.assertEqual("END", state["runtime_config"]["next_action"])
+        self.assertEqual(0, state["runtime_config"].get("master_queue_run_count", 0))
         self.assertEqual(0, self._count("tbl_input"))
 
     def test_valid_excel_rows_insert_into_input_and_distinct_application_queues(self) -> None:
@@ -322,9 +330,48 @@ class ExcelMasterQueueTests(unittest.TestCase):
 
         self.assertEqual(2, self._count("tbl_queue"))
         self.assertEqual(
-            0,
+            1,
             state["runtime_config"]["queue_creation_summary"]["eligible_input_count"],
         )
+        self.assertEqual(1, state["runtime_config"]["master_queue_run_count"])
+
+    def test_master_queue_is_not_due_when_masterbot_is_disabled(self) -> None:
+        state = self._state(masterbot=False)
+
+        self.assertFalse(is_master_queue_due(state))
+
+    def test_blank_or_zero_interval_runs_only_once(self) -> None:
+        completed_at = datetime(2026, 8, 16, 8, 0, tzinfo=timezone.utc)
+        for interval in (None, "", 0, "0"):
+            with self.subTest(interval=interval):
+                state = self._state(master_queue_interval_hours=interval)
+                self.assertTrue(is_master_queue_due(state, completed_at))
+
+                record_master_queue_run(state, completed_at)
+
+                self.assertFalse(
+                    is_master_queue_due(state, completed_at + timedelta(days=30))
+                )
+
+    def test_positive_interval_becomes_due_after_elapsed_hours(self) -> None:
+        completed_at = datetime(2026, 8, 16, 8, 0, tzinfo=timezone.utc)
+        state = self._state(master_queue_interval_hours=2)
+        record_master_queue_run(state, completed_at)
+
+        self.assertFalse(is_master_queue_due(state, completed_at + timedelta(minutes=119)))
+        self.assertTrue(is_master_queue_due(state, completed_at + timedelta(hours=2)))
+
+    def test_decimal_master_queue_interval_is_supported(self) -> None:
+        state = self._state(master_queue_interval_hours="0.5")
+
+        self.assertEqual(Decimal("0.5"), master_queue_interval_hours(state))
+
+    def test_invalid_master_queue_interval_is_rejected(self) -> None:
+        for interval in (-1, "not-a-number"):
+            with self.subTest(interval=interval):
+                state = self._state(master_queue_interval_hours=interval)
+                with self.assertRaisesRegex(ValueError, "master_queue_interval_hours"):
+                    is_master_queue_due(state)
 
     def test_configured_eligible_status_is_used_for_input_and_queue(self) -> None:
         workbook_path = self._write_excel(
@@ -463,6 +510,35 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual("In Processing", queue_row["Processing_Status"])
         self.assertEqual("BOT-1", queue_row["Bot_Name"])
         self.assertIsNotNone(queue_row["ProcessingSTART_timestamp"])
+
+    def test_get_next_transaction_filters_by_active_application(self) -> None:
+        self._insert_input_and_queue("Queue Created", application_id=10)
+        expected_input_id = self._insert_input_and_queue(
+            "Queue Created", application_id=13
+        )
+        state = self._state()
+        state["runtime_config"]["active_application_id"] = 13
+
+        get_next_transaction(state)
+
+        txn = state["runtime_config"]["txn"]
+        self.assertEqual(expected_input_id, txn["input_id"])
+        self.assertEqual(13, txn["queue_application_details"])
+        statuses = self.db.connection.execute(
+            "SELECT Application_Details, Processing_Status FROM tbl_queue ORDER BY ID"
+        ).fetchall()
+        self.assertEqual("Queue Created", statuses[0]["Processing_Status"])
+        self.assertEqual("In Processing", statuses[1]["Processing_Status"])
+
+    def test_global_eligible_check_is_independent_of_active_application(self) -> None:
+        self._insert_input_and_queue("Queue Created", application_id=10)
+        state = self._state()
+        state["runtime_config"]["active_application_id"] = 13
+
+        get_next_transaction(state)
+
+        self.assertEqual("NO_TRANSACTION", state["runtime_config"]["last_status"])
+        self.assertTrue(state["queue"].has_eligible_transactions())
 
     def test_get_next_transaction_returns_no_transaction_when_no_eligible_queue_row(self) -> None:
         self._insert_input_and_queue("Already Done")
@@ -632,6 +708,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
         queue_file: str = "input.xlsx",
         process_id: str = "12",
         queue_source: str = "Excel",
+        master_queue_interval_hours: object = None,
     ) -> dict:
         return {
             "config": {
@@ -646,6 +723,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
                     "Process_ID": process_id,
                     "settings": {
                         "masterbot": masterbot,
+                        "master_queue_interval_hours": master_queue_interval_hours,
                         "Queue": queue_source,
                         "QueueFileLocation": queue_file,
                         "ApiConfig": {},
@@ -657,7 +735,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
                 "share_root": str(SHARE_ROOT),
                 "project_config_dir": str(self.project_dir),
             },
-            "runtime_config": {},
+            "runtime_config": {"active_application_id": 10},
             "queue_db": self.db,
             "key_steps": self._key_steps([(1, 13), (2, 14), (3, 13)]),
             "logs": [],
@@ -683,7 +761,12 @@ class ExcelMasterQueueTests(unittest.TestCase):
         row = self.db.connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
         return int(row["count"])
 
-    def _insert_input_and_queue(self, status: str, bot_comment: str | None = None) -> int:
+    def _insert_input_and_queue(
+        self,
+        status: str,
+        bot_comment: str | None = None,
+        application_id: int = 10,
+    ) -> int:
         cursor = self.db.connection.execute(
             """
             INSERT INTO tbl_input (
@@ -696,7 +779,14 @@ class ExcelMasterQueueTests(unittest.TestCase):
             )
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            [10, 20, "2026-05-25", '{"case": "CASE-1"}', "CASE-1", f"20_CASE-1_{status}"],
+            [
+                10,
+                20,
+                "2026-05-25",
+                '{"case": "CASE-1"}',
+                "CASE-1",
+                f"20_CASE-1_{status}_{application_id}",
+            ],
         )
         input_id = int(cursor.lastrowid)
         self.db.connection.execute(
@@ -704,7 +794,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
             INSERT INTO tbl_queue (Case_Details, Application_Details, Processing_Status, Bot_Comment)
             VALUES (?, ?, ?, ?)
             """,
-            [input_id, 10, status, bot_comment],
+            [input_id, application_id, status, bot_comment],
         )
         self.db.connection.commit()
         return input_id

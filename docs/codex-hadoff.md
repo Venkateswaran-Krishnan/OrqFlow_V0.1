@@ -1183,3 +1183,48 @@ Release status:
 - The duplicate-input change currently exists only in framework source.
 - The already installed `framework 0.1.2` contains the safe-logging change but not the later duplicate-input change.
 - Use a new `0.1.3` release before deploying the duplicate-input behavior; do not rebuild a different artifact under the existing `0.1.2` version.
+
+## 2026-08-16 Application Batch Scheduler and Masterbot Scheduling
+
+Scheduler behavior:
+
+- `FRAMEWORK_INIT` validates and stores ordered `PROCESS_TRANSACTION` KeySteps definitions.
+- Each process row owns its `BatchCount`: blank/zero means all eligible work; a positive integer limits finalized transactions in one application session; negative, decimal, and nonnumeric values are rejected.
+- Runtime tracks the active step index, application ID, batch limit, and per-session finalized transaction count.
+- Transaction fetch SQL now filters by `Application_Details`; a separate global eligibility query supports application switching and final completion decisions for both SQLite and MySQL.
+- Success, skipped business exceptions, and retry-exhausted failures increment the session count. Retry attempts do not.
+- Completed batches route through `EXECUTION_INIT`, reset the application session, and advance cyclically through process applications instead of ending the framework.
+
+Execution initialization:
+
+- Added `framework/runtime/execution_init_runtime.py` and connected the `execution_init` graph node to it.
+- Supported reasons are `STARTUP`, `BATCH_COMPLETE`, `APP_SWITCH`, `RETRY`, and `MASTER_QUEUE_REFRESH`.
+- Optional application-specific reset hooks come from matching `EXECUTION_INIT` KeySteps rows using `package.module:function`.
+- Batch completion and application switching run the current application's reset hook, reset the session, and activate the next ordered process step.
+- Retry runs the same application's reset hook, preserves the transaction/application, resets the session, and routes directly to login/process without fetching another transaction.
+
+Masterbot scheduling:
+
+- `masterbot: false` never runs queue creation.
+- Blank/zero `master_queue_interval_hours` runs once per framework execution.
+- A positive interval runs at startup and when the configured hours have elapsed; decimals are supported.
+- Successful runs record a count and UTC timestamp; failed runs are not recorded as successful.
+- Added `MASTER_QUEUE_WAIT`, which uses positive `execution_config.wait_seconds` polling and rejects values that could create a busy loop.
+
+Routing and cleanup:
+
+- An empty active application switches when another application has globally eligible work.
+- When the global queue is empty, the current application session closes/resets before periodic wait or final `END` selection.
+- Terminal cleanup now sets `runtime_config.next_action = "END"` after resource cleanup.
+- Transition wait diagnostics no longer log the complete runtime dictionary.
+
+Verification:
+
+- Added execution-init, transition, scheduler-routing, and compiled-graph integration tests.
+- The compiled graph processed simulated work in the expected order: `13-A`, `13-B`, `14-A`, `13-C`, `14-B`.
+- Full source suite after the terminal-state fix: `74 tests passed`.
+- These scheduler changes are assigned to framework release `0.1.4` and are included in the release commit.
+- Source verification completed with `74 tests passed`.
+- Built artifact: `dist/framework-0.1.4-py3-none-any.whl`.
+- Artifact SHA-256: `7466BCAACFC92898F0F94DAC388B3BFF7018DEDE6AB6A2F76EC9AD4CCCFAC4DE`.
+- The `0.1.4` wheel has not yet been installed or deployed; do not rebuild a different artifact under this version.

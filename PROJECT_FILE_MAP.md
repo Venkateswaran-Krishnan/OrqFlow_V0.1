@@ -58,17 +58,20 @@ Framework startup behavior. Loads `KeySteps.xlsx` and initializes the configured
 `framework/runtime/application_runtime.py`  
 Application login behavior. Skips login after it has already completed for the current execution.
 
+`framework/runtime/execution_init_runtime.py`
+Coordinates startup, application batch completion, application switching, retry recovery, optional project-specific reset hooks, and scheduled master-queue refresh preparation.
+
 `framework/runtime/queue_runtime.py`  
 Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
 
 `framework/runtime/process_runtime.py`
-Selects the active application's `PROCESS_TRANSACTION` row from `KeySteps.xlsx`, imports the configured `package.module:function`, executes it, validates its result, and maps failures to framework outcomes.
+Loads the ordered `PROCESS_TRANSACTION` scheduler definitions, validates KeySteps `BatchCount`, tracks the active application session, selects and invokes the configured `package.module:function`, validates its result, and maps failures to framework outcomes.
 
 `framework/runtime/transition_runtime.py`  
 Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end. Transition-input diagnostics use an explicit safe-field list rather than logging complete runtime state.
 
 `framework/runtime/cleanup_runtime.py`  
-Stops the browser driver, closes the queue database connection, and logs cleanup progress.
+Stops the browser driver, closes the queue database connection, sets the terminal runtime action to `END`, and logs cleanup progress.
 
 `framework/runtime/__init__.py`  
 Marks the runtime package.
@@ -93,7 +96,19 @@ Repo-local shared config model, including global config, project config, app mod
 Covers input loading, queue creation, SQLite/MySQL duplicate-input recognition, informational skip behavior, database status updates, transaction fetching, and genuine queue failure behavior.
 
 `tests/test_process_runtime.py`
-Covers configured process-module execution, returned results, missing application configuration, module exceptions, and exception-message logging.
+Covers configured process-module execution, ordered scheduler initialization, KeySteps batch parsing, application advancement, finalized transaction counts, returned results, missing application configuration, and module exceptions.
+
+`tests/test_execution_init_runtime.py`
+Covers startup, batch completion, application switching, retry preservation, optional application reset hooks, and reset-hook failures.
+
+`tests/test_transition_runtime.py`
+Covers finalized transaction routing, positive and unlimited batches, retry preservation/exhaustion, and global application-switch decisions.
+
+`tests/test_scheduler_routing.py`
+Covers retry-to-login routing, global queue completion, periodic masterbot due/wait behavior, and wait configuration validation.
+
+`tests/test_graph_scheduler_integration.py`
+Runs the compiled graph with simulated queue items to verify multi-application batch order, complete processing, cleanup, and the terminal `END` state.
 
 `tests/test_safe_logging.py`
 Covers the transaction-fetch and transition-input safe-field allowlists and verifies that customer and OCR sentinel values cannot appear in those DEBUG messages.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 import pandas as pd
@@ -19,6 +20,103 @@ PROCESS_OUTCOMES = {
 }
 
 
+def initialize_process_scheduler(state: OrqflowState) -> OrqflowState:
+    process_steps = load_process_steps(state)
+    state["process_steps"] = process_steps
+    _activate_process_step(state, 0)
+
+    logger = get_logger("runtime.process")
+    runtime = state["runtime_config"]
+    logger.info("Process scheduler initialized")
+    logger.debug(
+        "Process scheduler state: step_count=%s, active_step_index=%s, "
+        "active_application_id=%s, active_batch_limit=%s, session_batch_count=%s",
+        len(process_steps),
+        runtime["active_process_step_index"],
+        runtime["active_application_id"],
+        runtime["active_batch_limit"],
+        runtime["session_batch_count"],
+    )
+    return state
+
+
+def record_finalized_transaction(state: OrqflowState) -> OrqflowState:
+    runtime = state["runtime_config"]
+    current_count = _nonnegative_integer(
+        runtime.get("session_batch_count", 0),
+        "runtime_config.session_batch_count",
+    )
+    runtime["session_batch_count"] = current_count + 1
+
+    logger = get_logger("runtime.process")
+    logger.info("Application session batch progress recorded")
+    logger.debug(
+        "Application session batch progress: application_id=%s, count=%s, limit=%s",
+        runtime.get("active_application_id"),
+        runtime["session_batch_count"],
+        runtime.get("active_batch_limit"),
+    )
+    return state
+
+
+def is_session_batch_complete(state: OrqflowState) -> bool:
+    runtime = state["runtime_config"]
+    batch_limit = runtime.get("active_batch_limit")
+    if batch_limit is None:
+        return False
+
+    limit = _nonnegative_integer(
+        batch_limit,
+        "runtime_config.active_batch_limit",
+    )
+    if limit == 0:
+        raise ValueError("runtime_config.active_batch_limit must be positive or None")
+    count = _nonnegative_integer(
+        runtime.get("session_batch_count", 0),
+        "runtime_config.session_batch_count",
+    )
+    return count >= limit
+
+
+def activate_next_process_step(state: OrqflowState) -> OrqflowState:
+    process_steps = state.get("process_steps")
+    if not isinstance(process_steps, list) or not process_steps:
+        raise ValueError("state['process_steps'] is required for scheduler advancement")
+
+    runtime = state["runtime_config"]
+    current_index = _nonnegative_integer(
+        runtime.get("active_process_step_index"),
+        "runtime_config.active_process_step_index",
+    )
+    if current_index >= len(process_steps):
+        raise ValueError("runtime_config.active_process_step_index is out of range")
+
+    next_index = (current_index + 1) % len(process_steps)
+    _activate_process_step(state, next_index)
+
+    logger = get_logger("runtime.process")
+    logger.info("Next process step activated")
+    logger.debug(
+        "Active process step: step_index=%s, application_id=%s, batch_limit=%s, "
+        "session_batch_count=%s",
+        runtime["active_process_step_index"],
+        runtime["active_application_id"],
+        runtime["active_batch_limit"],
+        runtime["session_batch_count"],
+    )
+    return state
+
+
+def _activate_process_step(state: OrqflowState, step_index: int) -> None:
+    process_steps = state["process_steps"]
+    active_step = process_steps[step_index]
+    runtime = state["runtime_config"]
+    runtime["active_process_step_index"] = step_index
+    runtime["active_application_id"] = active_step["application_id"]
+    runtime["active_batch_limit"] = active_step["batch_limit"]
+    runtime["session_batch_count"] = 0
+
+
 def execute_process_transaction(state: OrqflowState) -> OrqflowState:
     runtime = state["runtime_config"]
     logger = get_logger("runtime.process")
@@ -33,8 +131,8 @@ def execute_process_transaction(state: OrqflowState) -> OrqflowState:
             raise ValueError("Queue transaction has no application ID")
 
         selected_step = _select_process_step(state, application_id)
-        module_spec = _required_text(selected_step["Module"], "Module")
-        sequence = selected_step["Sequence"]
+        module_spec = selected_step["module"]
+        sequence = selected_step["sequence"]
 
         logger.info("Process transaction started")
         logger.debug(
@@ -86,11 +184,27 @@ def execute_process_transaction(state: OrqflowState) -> OrqflowState:
 
 
 def _select_process_step(state: OrqflowState, application_id: Any) -> Mapping[str, Any]:
+    process_steps = state.get("process_steps")
+    if not isinstance(process_steps, list) or not process_steps:
+        process_steps = load_process_steps(state)
+    matching_steps = [
+        step
+        for step in process_steps
+        if _application_matches(step["application_id"], application_id)
+    ]
+    if not matching_steps:
+        raise ValueError(
+            f"No {PROCESS_STATE} step found for Application {application_id}"
+        )
+    return matching_steps[0]
+
+
+def load_process_steps(state: OrqflowState) -> list[dict[str, Any]]:
     key_steps = state.get("key_steps")
     if not isinstance(key_steps, pd.DataFrame):
         raise ValueError("KeySteps data is not loaded")
 
-    required_columns = {"Sequence", "State", "Application", "Module"}
+    required_columns = {"Sequence", "State", "BatchCount", "Application", "Module"}
     missing_columns = sorted(required_columns.difference(key_steps.columns))
     if missing_columns:
         raise ValueError(
@@ -98,22 +212,87 @@ def _select_process_step(state: OrqflowState, application_id: Any) -> Mapping[st
         )
 
     states = key_steps["State"].astype(str).str.strip().str.upper()
-    applications = key_steps["Application"].map(
-        lambda value: _application_matches(value, application_id)
+    process_steps = key_steps.loc[states == PROCESS_STATE].copy()
+    if process_steps.empty:
+        raise ValueError(f"KeySteps has no {PROCESS_STATE} rows")
+
+    process_steps["_workbook_order"] = range(len(process_steps))
+    process_steps["_excel_row"] = [
+        position + 2
+        for position, is_process_step in enumerate(states == PROCESS_STATE)
+        if is_process_step
+    ]
+    process_steps["_numeric_sequence"] = pd.to_numeric(
+        process_steps["Sequence"], errors="raise"
     )
-    matching_steps = key_steps.loc[(states == PROCESS_STATE) & applications].copy()
-    if matching_steps.empty:
+    process_steps = process_steps.sort_values(
+        ["_numeric_sequence", "_workbook_order"], kind="stable"
+    )
+
+    definitions = []
+    for _, row in process_steps.iterrows():
+        excel_row = int(row["_excel_row"])
+        definitions.append(
+            {
+                "sequence": row["Sequence"],
+                "application_id": _positive_integer(
+                    row["Application"], "Application", excel_row
+                ),
+                "module": _required_text(row["Module"], "Module"),
+                "batch_limit": _parse_batch_limit(row["BatchCount"], excel_row),
+                "excel_row": excel_row,
+            }
+        )
+    return definitions
+
+
+def _parse_batch_limit(value: Any, excel_row: int) -> int | None:
+    if value is None or pd.isna(value) or not str(value).strip():
+        return None
+
+    number = _decimal_value(value, "BatchCount", excel_row)
+    if number != number.to_integral_value():
         raise ValueError(
-            f"No {PROCESS_STATE} step found for Application {application_id}"
+            f"KeySteps row {excel_row} has invalid BatchCount: {value!r}; "
+            "expected zero or a positive integer"
         )
 
-    matching_steps["_numeric_sequence"] = pd.to_numeric(
-        matching_steps["Sequence"], errors="raise"
-    )
-    selected_step = matching_steps.sort_values(
-        "_numeric_sequence", kind="stable"
-    ).iloc[0]
-    return selected_step
+    batch_limit = int(number)
+    if batch_limit < 0:
+        raise ValueError(
+            f"KeySteps row {excel_row} has invalid BatchCount: {value!r}; "
+            "expected zero or a positive integer"
+        )
+    return None if batch_limit == 0 else batch_limit
+
+
+def _positive_integer(value: Any, name: str, excel_row: int) -> int:
+    number = _decimal_value(value, name, excel_row)
+    if number != number.to_integral_value() or number <= 0:
+        raise ValueError(
+            f"KeySteps row {excel_row} has invalid {name}: {value!r}; "
+            "expected a positive integer"
+        )
+    return int(number)
+
+
+def _decimal_value(value: Any, name: str, excel_row: int) -> Decimal:
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(
+            f"KeySteps row {excel_row} has invalid {name}: {value!r}"
+        ) from error
+    if not number.is_finite():
+        raise ValueError(f"KeySteps row {excel_row} has invalid {name}: {value!r}")
+    return number
+
+
+def _nonnegative_integer(value: Any, name: str) -> int:
+    number = _decimal_value(value, name, 0)
+    if number != number.to_integral_value() or number < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return int(number)
 
 
 def _load_process_function(module_spec: str) -> Callable[[OrqflowState], Any]:
