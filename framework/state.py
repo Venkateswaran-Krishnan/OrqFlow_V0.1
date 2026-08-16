@@ -12,4 +12,5 @@ class OrqflowState(TypedDict, total=False):
     queue: Any
     queue_db: Any
     key_steps: Any
+    process_steps: list[dict[str, Any]]
     logs: list[str]

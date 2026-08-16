@@ -13,6 +13,16 @@ Run input loading only when all are true:
 
 If `masterbot` is false, skip this block completely.
 
+Schedule rules:
+
+- `masterbot: false`: never run master queue creation.
+- `masterbot: true` with blank or zero `master_queue_interval_hours`: run once per framework execution.
+- `masterbot: true` with a positive interval: run at startup and again after each elapsed interval.
+- Decimal hours are supported, for example `0.5` means 30 minutes.
+- Negative and nonnumeric intervals are configuration errors.
+- Successful runs update `runtime_config.master_queue_run_count` and the timezone-aware UTC `master_queue_last_run_at`; failed runs do not.
+- When the queue is empty before a periodic run is due, `MASTER_QUEUE_WAIT` uses a positive `execution_config.wait_seconds` polling interval.
+
 Supported source adapters:
 
 - `Excel`: reads `QueueFileLocation` through `share/common/excel.py`.
@@ -68,6 +78,11 @@ Supported source adapters:
 - Insert into `tbl_input` row by row.
 - Commit each row independently.
 - Let the DB reject duplicates, especially duplicate `Input_Identifier`; do not pre-deduplicate in Python.
+- Treat a database-rejected duplicate `Input_Identifier` as an expected idempotent skip:
+  - Roll back that row.
+  - Increment `skipped_count` and record the Excel row number in `skipped_rows`.
+  - Log the skip at `INFO` without a traceback; keep row details at `DEBUG`.
+  - Do not increment `failed_count` or add the duplicate to `failed_rows`.
 - If a row fails:
   - Roll back that row.
   - Record DataFrame/Excel row number and error in the insert summary.
@@ -91,7 +106,7 @@ Supported source adapters:
 ## Error Behavior
 
 - Missing `QueueFileLocation`, missing Excel file, unsupported source, unconfigured API source, missing required source fields, missing/invalid process KeySteps, nonexistent application IDs, missing `state["queue_db"]`, or missing `process_config.Process_ID` should set runtime failure state and prevent moving to `get_transaction`.
-- Row-level missing values or duplicate insert failures should not fail the whole load; they should be recorded in the insert summary.
+- Row-level missing values should be recorded as failures without stopping later rows. Duplicate identifiers should be recorded separately as informational skips.
 - The graph should route to `end` or stop cleanly after failure instead of continuing transaction fetch.
 
 ## Test Plan
@@ -99,6 +114,9 @@ Supported source adapters:
 - `masterbot: false` skips Excel loading.
 - `masterbot: true` + `Queue: Excel` reads the Excel file.
 - `masterbot: true` + `Queue: API` uses the API adapter and reports a clear configuration error until API details are implemented.
+- Blank/zero interval permits exactly one successful master-queue run per framework execution.
+- Positive interval becomes due only after the configured elapsed time.
+- Periodic waiting rejects zero, negative, blank, or nonnumeric `wait_seconds`.
 - Missing required `Case_ID` field fails before inserts.
 - Missing required cell values skip only those rows.
 - Valid rows insert into `tbl_input`.
@@ -107,7 +125,7 @@ Supported source adapters:
 - `Input_Identifier` is generated as `Process_ID_Case_ID`.
 - Optional DB-matching columns are inserted.
 - Extra non-DB columns are ignored.
-- Duplicate `Input_Identifier` is rejected by DB on that row and the load continues.
+- Duplicate `Input_Identifier` is rejected by the DB, recognized for both SQLite and MySQL, logged at `INFO`, counted as skipped rather than failed, and the load continues.
 - Earlier rows remain committed after a later row fails.
 - Later valid rows are still inserted after a failed row.
 - Duplicate KeyStep applications create only one queue row per input.

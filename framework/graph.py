@@ -15,7 +15,9 @@ from framework.nodes import (
     get_transaction,
     login_application,
     master_queue_creator,
+    master_queue_wait,
     process_transaction,
+    route_after_framework_init,
     route_after_execution_init,
     route_after_get,
     route_after_master_queue_creator,
@@ -31,6 +33,7 @@ def build_graph():
     graph.add_node("framework_init", framework_init)
     graph.add_node("execution_init", execution_init)
     graph.add_node("master_queue_creator", master_queue_creator)
+    graph.add_node("master_queue_wait", master_queue_wait)
     graph.add_node("get_transaction", get_transaction)
     graph.add_node("login_application", login_application)
     graph.add_node("process_transaction", process_transaction)
@@ -38,15 +41,26 @@ def build_graph():
     graph.add_node("end", end)
 
     graph.set_entry_point("framework_init")
-    graph.add_edge("framework_init", "execution_init")
+    graph.add_conditional_edges(
+        "framework_init",
+        route_after_framework_init,
+        {
+            "execution_init": "execution_init",
+            "end": "end",
+        },
+    )
     graph.add_conditional_edges(
         "execution_init",
         route_after_execution_init,
         {
             "master_queue_creator": "master_queue_creator",
+            "master_queue_wait": "master_queue_wait",
             "get_transaction": "get_transaction",
+            "login_application": "login_application",
+            "end": "end",
         },
     )
+    graph.add_edge("master_queue_wait", "execution_init")
     graph.add_conditional_edges(
         "master_queue_creator",
         route_after_master_queue_creator,
@@ -99,7 +113,7 @@ def run_graph(config_path: str | Path = DEFAULT_BOOTSTRAP_PATH) -> dict[str, Any
 
 def _log_effective_config(state: dict[str, Any]) -> None:
     logger = get_logger("config")
-    logger.info(
+    logger.debug(
         "Effective config: %s",
         json.dumps(state.get("config", {}), indent=2, sort_keys=True, default=str),
     )

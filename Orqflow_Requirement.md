@@ -23,13 +23,15 @@ LangGraph State Orchestrator
        FRAMEWORK_INIT
        EXECUTION_INIT
        MASTER_QUEUE_CREATOR
+       MASTER_QUEUE_WAIT
        GET_TRANSACTION
+       LOGIN_APPLICATION
        PROCESS_TRANSACTION
        TRANSITION_HUB
        END
   -> Service Layer
        Framework Lifecycle Service
-       Execution Lifecycle Service
+       Execution Init Runtime Service
        Queue Runtime Service
        Transaction Runtime Service
        Transition Runtime Service
@@ -58,7 +60,7 @@ LangGraph State Orchestrator
 | Config Library | Provides framework, execution, and process configuration. |
 | Logging Config | Configures execution-scoped logging, log levels, console/file handlers, and rolling log files. |
 | Queue Adapter | Provides transaction retrieval and status updates against the RPA queue/input tables. |
-| Runtime Modules | Contains configured init and process function files loaded at the appropriate lifecycle point. |
+| Runtime Modules | Contains configured application reset and transaction process callables loaded at the appropriate lifecycle point. |
 | Automation Steps | Excel/CSV-driven step definitions that explicitly map keywords to functions. |
 
 ### 2.2 Service Layer
@@ -70,12 +72,11 @@ Current service responsibilities:
 | Service | Responsibility |
 | --- | --- |
 | `framework_lifecycle` | Framework-level startup behavior such as queue adapter initialization. |
-| `execution_lifecycle` | Execution-cycle setup, init module loading, automation step loading, repository setup, driver start/restart, and init-step execution. |
-| `queue_runtime` | Master queue creation placeholder, transaction fetch, wait handling, batch counter updates, and transaction assignment to runtime state. |
-| `transaction_runtime` | Process-module lazy loading for the active app/process and process-step execution. |
-| `transition_runtime` | Transaction status updates and post-process routing decisions. |
-| `cleanup_runtime` | Driver shutdown and execution cleanup. |
-| `runtime_state` | Shared helpers for storing step results, clearing process runtime, loading process modules, and deciding next transaction/end behavior. |
+| `execution_init_runtime` | Execution-cycle coordination, optional application reset-hook execution, retry preservation, and process-step advancement. |
+| `queue_runtime` | Database-backed master queue creation and scheduling, application-filtered transaction fetch, global eligibility checks, queue status updates, and transaction assignment. |
+| `process_runtime` | Ordered KeySteps scheduler setup, per-session batch tracking, process-module selection, dynamic callable loading, result validation, and process execution. |
+| `transition_runtime` | Final transaction status updates and batch, retry, application-switch, wait, and end decisions. |
+| `cleanup_runtime` | Driver/database shutdown, final runtime action assignment, and execution cleanup. |
 
 ## 3. State Management
 
@@ -87,23 +88,34 @@ The system shall maintain a single shared state object passed across all LangGra
 
 ```text
 state
-  execution_config
-  process_config
-  logging_config
+  config
+    execution_config
+    process_config
+    logging_config
+    queue_config
+    queue_database
+  config_context
   runtime_config
     retry_count
     batch_count
+    active_process_step_index
+    active_application_id
+    active_batch_limit
+    session_batch_count
+    execution_init_reason
+    master_queue_run_count
+    master_queue_last_run_at
     wait_count
     txn
     last_status
     last_error
     next_action
+  key_steps
+  process_steps
+  queue_db
+  queue
   repo
   driver
-  init_module
-  process_module
-  process_module_app
-  automation_steps
   logs
 ```
 
@@ -111,16 +123,15 @@ state
 
 | State Section | Mutability | Rule |
 | --- | --- | --- |
-| `execution_config` | Read-only | Loaded during initialization and not modified by runtime nodes. |
-| `process_config` | Read-only | Selected during execution initialization and not modified during transaction processing. |
-| `logging_config` | Read-only | Loaded from config and used to configure execution-scoped logging before the graph is invoked. |
+| `config` | Read-only | Merged global, project, and bot configuration; contains execution, process, logging, queue, and database sections. |
+| `config_context` | Read-only | Resolved bootstrap/shared/project/bot paths used by runtime loaders. |
 | `runtime_config` | Mutable | Updated by services to track retries, batch counts, wait counts, transaction context, errors, and routing actions. |
+| `key_steps` | Read-only runtime data | `KeySteps.xlsx` DataFrame loaded once during framework initialization. |
+| `process_steps` | Mutable scheduler data | Ordered and validated `PROCESS_TRANSACTION` definitions used for application-session scheduling. |
+| `queue_db` | Mutable runtime component | Active SQLite or MySQL database adapter initialized during framework startup. |
+| `queue` | Mutable runtime component | Database-backed transaction queue facade initialized on first transaction fetch. |
 | `repo` | Mutable runtime component | Repository handler may cache locator files and update internal runtime state. |
 | `driver` | Mutable runtime component | Driver wrapper owns browser lifecycle and may restart during recovery or app switch. |
-| `init_module` | Mutable runtime component | Runtime-loaded init/setup function module for the active process/app execution cycle. |
-| `process_module` | Mutable runtime component | Runtime-loaded process function module for transaction execution, loaded by `PROCESS_TRANSACTION`. |
-| `process_module_app` | Mutable runtime marker | Identifies which app/process the loaded `process_module` belongs to. |
-| `automation_steps` | Mutable runtime component | Loaded Excel/CSV step definitions used to drive init and process function execution. |
 | `logs` | Mutable trace list | In-memory execution trace used for tests and execution summaries; operational logging is handled by the logging framework. |
 
 ### 3.4 State Rules
@@ -159,15 +170,13 @@ Execution initialization runs at the start of an app/process execution cycle and
 
 Responsibilities:
 
-- Select or load the active process/app configuration.
-- Dynamically load the configured init module based on process/app config.
-- Clear any previously loaded process module/app marker so `PROCESS_TRANSACTION` can load the process module for the active app/process.
-- Load and validate the configured Excel/CSV automation steps file.
-- Initialize or restart the Playwright driver wrapper.
-- Load or refresh app-specific repository context.
-- Perform login or session setup by executing configured init steps/functions when required by the active process/app.
-- Reset runtime counters and transaction context where appropriate.
-- Prepare shared state for transaction processing.
+- Coordinate application-session startup, batch completion, application switching, retry recovery, and master-queue refresh.
+- Use `runtime_config.execution_init_reason` to select the required behavior.
+- Execute the optional project-specific `EXECUTION_INIT` KeySteps hook for the active application when a session reset is required.
+- Keep application-specific close/reset behavior outside the framework.
+- Reset `application_logged_in` and the per-session batch counter when a session is restarted.
+- Advance to the next ordered `PROCESS_TRANSACTION` application after `BATCH_COMPLETE` or `APP_SWITCH`.
+- Preserve the current transaction and active application during `RETRY`.
 
 Execution initialization may be triggered by:
 
@@ -176,6 +185,8 @@ Execution initialization may be triggered by:
 - Application switch.
 - Browser or session recovery.
 - Framework-controlled restart of the execution cycle.
+- Completed application batch.
+- Scheduled master-queue refresh.
 
 ## 5. Configuration Management
 
@@ -188,11 +199,11 @@ Configuration shall be loaded from a shared config library.
 Execution configuration contains framework execution control parameters:
 
 - `retry_limit`
-- `batch_enabled`
-- `batch_limit`
 - `wait_enabled`
 - `wait_limit`
 - `wait_seconds`
+
+Transaction batch limits are read from each `PROCESS_TRANSACTION` KeySteps row's `BatchCount`, not from the legacy global `batch_enabled` or `batch_limit` settings.
 
 ### 5.3 `process_config`
 
@@ -204,6 +215,7 @@ Process configuration contains process/app-specific settings:
 - process module file path or identifier
 - automation steps Excel/CSV file path
 - queue creation flag
+- `master_queue_interval_hours`
 - login/session settings
 - application-specific settings
 
@@ -320,15 +332,17 @@ Each repository element shall support:
 
 ### 8.1 Design
 
-The framework shall dynamically load configured runtime modules and automation steps based on lifecycle ownership and the active process/app configuration.
+The framework shall dynamically load the process callable configured for the active queue application's `PROCESS_TRANSACTION` KeySteps row.
 
 The runtime execution model shall use:
 
-- an init module containing setup, login, session, and pre-check functions
-- a process module containing process-specific transaction functions
-- an Excel/CSV automation steps file that defines execution order and explicitly maps each keyword step to a function
-- init modules are loaded during `EXECUTION_INIT`
-- process modules are lazy-loaded during `PROCESS_TRANSACTION` and associated with `process_module_app`
+- `KeySteps.xlsx` loaded once during `FRAMEWORK_INIT`
+- the active transaction's `queue_application_details` as the application selector
+- `State = PROCESS_TRANSACTION` and `Application` to select matching rows
+- numeric `Sequence` ordering when more than one row matches
+- a `Module` value in `package.module:function` format
+- a `BatchCount` value where blank or zero means all eligible work and a positive integer is the session limit
+- lazy import and invocation during `PROCESS_TRANSACTION`
 
 ### 8.2 Responsibility Split
 
@@ -336,19 +350,19 @@ The runtime execution model shall use:
 | --- | --- |
 | Framework | Orchestration, lifecycle, retry, state, driver, repository, config, queue interaction, dynamic module loading, step execution, logging, result handling, and transitions. |
 | Services | Implement node behavior behind thin LangGraph node wrappers. |
-| Init Module | Callable setup functions such as login, session preparation, app readiness checks, and execution-cycle preparation. |
-| Process Module | Callable process-specific functions used during transaction execution. |
-| Automation Steps | Excel/CSV step definitions that control execution order and map keywords to module functions. |
+| Application Runtime | Owns login/session preparation before process execution. The current login implementation is a lifecycle placeholder. |
+| Process Module | Exposes the callable named by the KeySteps `Module` value and returns a framework-compatible result. |
+| KeySteps | Selects process application, execution sequence, state, and module callable. |
 
 ### 8.3 Config-Driven Step Model
 
-The framework shall support a config-driven step execution model:
+The framework shall support a KeySteps-driven process execution model:
 
-- The active process/app config identifies the init module, process module, and automation steps file.
-- Automation steps are maintained in Excel/CSV format.
-- Each step explicitly identifies the source module and function to execute.
-- The framework resolves and executes steps in order.
-- The process module is loaded only when process steps are executed and is invalidated during execution reinitialization/app switch.
+- The active project configuration directory contains `KeySteps.xlsx`.
+- The framework matches `PROCESS_TRANSACTION` rows to the current queue application.
+- The selected row explicitly identifies the importable module and callable.
+- Matching rows are resolved in numeric sequence order; the current implementation executes the first matching row.
+- The process callable is imported only when the process node executes.
 - Runtime module functions execute using framework-provided state, driver wrapper, object repository, and configuration.
 - Runtime module functions shall not own orchestration, retry, queue updates, or graph routing.
 
@@ -356,42 +370,44 @@ The framework shall support a config-driven step execution model:
 
 Each automation step shall provide enough information for deterministic runtime resolution.
 
-Minimum step fields:
+Required process-step fields:
 
-- `order`
-- `phase`
-- `keyword`
-- `source`, such as `init` or `process`
-- `function_name`
-- `parameters`
-- `on_error`
+- `Sequence`
+- `State`
+- `BatchCount`
+- `Application`
+- `Module`
 
-Example conceptual steps:
+Example:
 
 ```text
-order | keyword          | source  | function_name       | parameters
-1     | login            | init    | login               | ...
-2     | prepare_session  | init    | prepare_session     | ...
-3     | open_case        | process | open_case           | ...
-4     | validate_data    | process | validate_data       | ...
-5     | submit           | process | submit_transaction  | ...
+Sequence | State               | BatchCount | Application | Module
+1        | PROCESS_TRANSACTION | 3          | 12          | image_value_extraction.runtime:run_process
 ```
+
+An optional project-specific application reset hook uses the same callable format:
+
+```text
+Sequence | State          | Application | Module
+1        | EXECUTION_INIT | 12          | image_value_extraction.runtime:reset_application
+```
+
+The reset hook receives the shared state. It is called for `BATCH_COMPLETE`, `APP_SWITCH`, and `RETRY`; it is not called during normal `STARTUP` or a master-queue refresh.
 
 ### 8.5 Function Contract
 
 Loaded functions shall accept the shared state and may use framework-provided driver, repository, and configuration through that state.
 
-Example conceptual function style:
+Example function style:
 
 ```python
-def login(state):
-    ...
-
-def open_case(state):
-    ...
-
-def submit_transaction(state):
-    ...
+def run_process(state):
+    return {
+        "outcome": "SUCCESS",
+        "message": "Document processed",
+        "data": {"output_path": "..."},
+        "next_action": None,
+    }
 ```
 
 Each executed step shall produce a framework-readable `StepResult`.
@@ -400,12 +416,12 @@ Each executed step shall produce a framework-readable `StepResult`.
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | Execution outcome such as `SUCCESS`, `BUSINESS_EXCEPTION`, `SYSTEM_EXCEPTION`, `NO_TRANSACTION`, or `END`. |
+| `outcome` | Required process outcome: `SUCCESS`, `BUSINESS_EXCEPTION`, or `SYSTEM_EXCEPTION`. |
 | `message` | Optional human-readable message or error detail. |
 | `data` | Optional output data from the step. |
 | `next_action` | Optional routing hint for framework-controlled transitions such as app switch. |
 
-Step functions may return `None`, an outcome string, an outcome enum, or a dictionary compatible with `StepResult`. The framework shall normalize the return value into `StepResult`.
+The process callable must return a mapping compatible with `StepResult`. Missing, unsupported, or malformed results are converted to `SYSTEM_EXCEPTION` by the process runtime.
 
 ## 9. Queue Management
 
@@ -556,10 +572,14 @@ The complete schema for these tables must be captured before implementation reli
 - Duplicate processing shall be prevented.
 - Failed transactions shall be recorded with a reason.
 - Queue selection shall prioritize records eligible by `Processing_Status`.
+- Runtime queue selection shall filter eligible records by `runtime_config.active_application_id`.
+- The queue adapter shall also provide a global eligible-record check used to decide whether the scheduler must switch applications or finish.
 - Queue records shall retain a durable link to `tbl_input.ID`.
 - Master queue creation shall accept supplied items as a DataFrame, whether the upstream source is Excel or an API call.
 - Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then create one linked `tbl_queue` row for each distinct application in the sequenced `PROCESS_TRANSACTION` KeySteps.
 - Queue creation shall consider only inputs for the configured process whose status is null or blank. The complete application queue set and the input's queue-created status/timestamp shall commit atomically per input.
+- `tbl_input.Input_Identifier` remains the database-enforced idempotency key. When an input identifier already exists, master queue loading shall roll back that row, record it as skipped, log the expected condition at `INFO` without a traceback, and continue. It shall not classify the duplicate as a failed input.
+- Non-duplicate database insert failures shall remain failed rows and shall be logged at `ERROR` with exception details.
 - Runtime transaction context shall include queue fields, input fields, and parsed `tbl_input.Case_Json` for process use.
 - `get_transaction` shall mark the selected queue item as `In Processing` and set `ProcessingSTART_timestamp`.
 - `process_transaction` may update runtime queue columns such as `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
@@ -576,6 +596,7 @@ The workflow shall include the following logical nodes:
 - `FRAMEWORK_INIT`
 - `EXECUTION_INIT`
 - `MASTER_QUEUE_CREATOR`
+- `MASTER_QUEUE_WAIT`
 - `GET_TRANSACTION`
 - `LOGIN_APPLICATION`
 - `PROCESS_TRANSACTION`
@@ -595,27 +616,33 @@ The workflow shall include the following logical nodes:
 
 #### EXECUTION_INIT
 
-- Select process/app configuration.
-- Load the configured init module.
-- Load and validate the configured Excel/CSV automation steps.
-- Initialize or restart driver.
-- Initialize app repository context.
-- Execute configured init steps/functions when login or session setup is required.
-- Prepare runtime state for processing.
-- Clear any previously loaded process module so process execution can load the module for the active app/process.
-- Delegate execution-cycle behavior to the execution lifecycle service.
+- Delegate to `framework.runtime.execution_init_runtime.initialize_execution`.
+- On `STARTUP`, retain the first process application selected during framework initialization.
+- On `BATCH_COMPLETE` or `APP_SWITCH`, run the current application's optional reset hook, reset its session, and activate the next ordered process step.
+- On `RETRY`, run the current application's optional reset hook, reset the application session, and preserve the active transaction and application.
+- On `MASTER_QUEUE_REFRESH`, retain the application session without running the reset hook.
+- Convert reset-hook loading or execution failures to `SYSTEM_EXCEPTION` and request `END`.
 
 #### MASTER_QUEUE_CREATOR
 
-- Populate queue if enabled.
-- Skip queue creation if disabled.
+- If `masterbot` is false, never populate the queue.
+- If `masterbot` is true and `master_queue_interval_hours` is blank or zero, populate once per framework execution.
+- If `masterbot` is true and `master_queue_interval_hours` is positive, populate at startup and whenever the interval has elapsed.
+- Record successful run count and UTC completion time; failed runs are not counted.
 - Delegate queue creation behavior to the queue runtime service.
+
+#### MASTER_QUEUE_WAIT
+
+- Used only when periodic masterbot scheduling is enabled, the queue is globally empty, and the next master run is not due.
+- Sleep for the positive `execution_config.wait_seconds` polling interval.
+- Route back through `EXECUTION_INIT` with reason `MASTER_QUEUE_REFRESH`.
+- Reject blank, zero, negative, or nonnumeric polling intervals to prevent a busy loop.
 
 #### GET_TRANSACTION
 
 - Fetch the next transaction.
 - Lock the transaction as `IN_PROGRESS`.
-- Update batch counter.
+- Fetch only for `runtime_config.active_application_id`.
 - Store the current transaction in `runtime_config.txn`.
 - If no transaction exists, store `NO_TRANSACTION` in runtime state and route to `TRANSITION_HUB`.
 - When a transaction is found, reset `runtime_config.wait_count` to `0`.
@@ -630,10 +657,15 @@ The workflow shall include the following logical nodes:
 
 #### PROCESS_TRANSACTION
 
-The framework executes the current transaction by reading the configured automation steps, resolving each step to an explicit source module and function, passing shared state into the function, and collecting a framework-readable outcome.
+The framework executes the current transaction by selecting the matching `PROCESS_TRANSACTION` row from the loaded `KeySteps.xlsx` DataFrame. Matching uses the active transaction's `queue_application_details` value and the KeySteps `Application` column. Matching rows are ordered by numeric `Sequence`, and the first row is selected.
 
-The process module shall be loaded at runtime by `PROCESS_TRANSACTION` for the active app/process. This prevents a module from a previous app/process execution cycle from being reused after an application switch.
-Transaction execution behavior shall be delegated to the transaction runtime service.
+The selected `Module` value shall use `package.module:function` format. For example:
+
+```text
+image_value_extraction.runtime:run_process
+```
+
+The configured callable shall receive the complete shared state and return a mapping containing `outcome` plus optional `message`, `data`, and `next_action` values. Process execution behavior shall be delegated to `framework.runtime.process_runtime`.
 
 | Outcome | Action |
 | --- | --- |
@@ -649,9 +681,14 @@ System exception retry logic:
 if retry_count < retry_limit:
     increment retry_count
     TRANSITION_HUB routes to EXECUTION_INIT for recovery
+    EXECUTION_INIT resets the same application
+    route directly to LOGIN_APPLICATION with the same transaction
 else:
-    mark transaction FAILED
-    TRANSITION_HUB routes to GET_TRANSACTION or END based on runtime controls
+    if an active transaction exists:
+        mark transaction FAILED
+        TRANSITION_HUB routes to GET_TRANSACTION or END based on runtime controls
+    else:
+        TRANSITION_HUB routes to END
 ```
 
 #### TRANSITION_HUB
@@ -668,6 +705,10 @@ Handles transaction status updates and routing decisions for:
 - retry recovery
 - end condition
 - transition behavior shall be delegated to the transition runtime service
+- increment `session_batch_count` only after a transaction is finalized as success, skipped, or final failure
+- route a completed positive batch through `EXECUTION_INIT`; batch completion does not directly mean `END`
+- when the active application has no work but eligible records exist globally, request `APP_SWITCH`
+- route to `END` only after application-session reset when no eligible queue work and no periodic masterbot wait remain
 
 ### 10.3 Graph Routing Contract
 
@@ -675,25 +716,35 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 
 | From Node | Condition | To Node |
 | --- | --- | --- |
-| `FRAMEWORK_INIT` | Always | `EXECUTION_INIT` |
-| `EXECUTION_INIT` | Always | `MASTER_QUEUE_CREATOR` |
-| `MASTER_QUEUE_CREATOR` | Always | `GET_TRANSACTION` |
+| `FRAMEWORK_INIT` | Initialization succeeds | `EXECUTION_INIT` |
+| `FRAMEWORK_INIT` | Initialization fails and requests `END` | `END` |
+| `EXECUTION_INIT` | Retry recovery succeeds | `LOGIN_APPLICATION` |
+| `EXECUTION_INIT` | Master queue is due | `MASTER_QUEUE_CREATOR` |
+| `EXECUTION_INIT` | Eligible queue work exists | `GET_TRANSACTION` |
+| `EXECUTION_INIT` | Queue empty and periodic masterbot is not yet due | `MASTER_QUEUE_WAIT` |
+| `EXECUTION_INIT` | Queue empty and no periodic run remains | `END` |
+| `MASTER_QUEUE_WAIT` | Polling wait completes | `EXECUTION_INIT` |
+| `MASTER_QUEUE_CREATOR` | Queue creation completes | `GET_TRANSACTION` |
+| `MASTER_QUEUE_CREATOR` | Queue creation fails and requests `END` | `END` |
 | `GET_TRANSACTION` | Transaction found | `LOGIN_APPLICATION` |
 | `GET_TRANSACTION` | No transaction | `TRANSITION_HUB` |
 | `LOGIN_APPLICATION` | Login already completed or login completed now | `PROCESS_TRANSACTION` |
 | `PROCESS_TRANSACTION` | Always after storing result | `TRANSITION_HUB` |
 | `TRANSITION_HUB` | Success/business exception and more work allowed | `GET_TRANSACTION` |
 | `TRANSITION_HUB` | No transaction and wait is enabled/remaining | `GET_TRANSACTION` |
-| `TRANSITION_HUB` | No transaction and no wait remains | `END` |
+| `TRANSITION_HUB` | Active application empty but eligible work exists globally | `EXECUTION_INIT` for `APP_SWITCH` |
+| `TRANSITION_HUB` | No eligible transaction remains globally | `EXECUTION_INIT` for session completion |
 | `TRANSITION_HUB` | System exception and retry remains | `EXECUTION_INIT` |
+| `TRANSITION_HUB` | System exception, retries exhausted, and no active transaction | `END` |
 | `TRANSITION_HUB` | Application switch required | `EXECUTION_INIT` |
-| `TRANSITION_HUB` | Batch/end condition reached | `END` |
+| `TRANSITION_HUB` | Active application batch limit reached | `EXECUTION_INIT` for `BATCH_COMPLETE` |
 
 #### END
 
 - Close the driver.
 - Release resources.
 - Complete final logging.
+- Set `runtime_config.next_action` to `END` so the returned terminal state is unambiguous.
 
 ## 11. Runtime Control
 
@@ -702,7 +753,15 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 | Field | Purpose |
 | --- | --- |
 | `retry_count` | Tracks system retry attempts. |
-| `batch_count` | Tracks number of processed transactions in the current batch. |
+| `batch_count` | Legacy total fetched-transaction counter retained for compatibility and diagnostics. |
+| `process_steps` | Ordered validated `PROCESS_TRANSACTION` definitions loaded from KeySteps. |
+| `active_process_step_index` | Identifies the active ordered process step. |
+| `active_application_id` | Application ID used to filter transaction fetches. |
+| `active_batch_limit` | Positive KeySteps batch limit, or `None` for all eligible work. |
+| `session_batch_count` | Number of finalized transactions in the active application session. |
+| `execution_init_reason` | Current coordinator reason such as `STARTUP`, `BATCH_COMPLETE`, `APP_SWITCH`, `RETRY`, or `MASTER_QUEUE_REFRESH`. |
+| `master_queue_run_count` | Number of successful master-queue runs in this framework execution. |
+| `master_queue_last_run_at` | Timezone-aware UTC completion time of the latest successful master-queue run. |
 | `wait_count` | Tracks idle wait attempts when no transaction is available. |
 | `application_logged_in` | Tracks whether application login has completed for the current execution. |
 | `txn` | Holds the current transaction. |
@@ -725,6 +784,8 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 | `GET_TRANSACTION` | The framework should fetch the next transaction. |
 | `RETRY` | A system exception can still retry and should route to `EXECUTION_INIT`. |
 | `APP_SWITCH` | The active app/process must change and should route to `EXECUTION_INIT`. |
+| `BATCH_COMPLETE` | The active application session must close/reset before selecting the next process step. |
+| `MASTER_QUEUE_REFRESH` | The periodic schedule should be checked through `EXECUTION_INIT`. |
 | `END` | Execution should route to `END`. |
 
 ## 12. Exception Handling
@@ -759,6 +820,18 @@ Logging shall:
 - support console output when enabled
 - support rotating file logs using configured file size and backup count
 - record unhandled framework execution errors with stack traces
+- record node entry, lifecycle progress, and transition outcomes at `INFO`
+- keep detailed configuration, transaction, application, queue, and process values at `DEBUG`
+- restrict transaction-fetch `DEBUG` messages to `queue_id`, `input_id`, and `application_id`
+- restrict transition-input `DEBUG` messages to outcome, queue ID, retry count, batch count, wait count, and requested action
+- restrict execution-initialization and scheduler `DEBUG` messages to safe operational fields such as reason, application IDs, limits, counts, timestamps, and selected module
+- do not dump the complete runtime dictionary while waiting for transactions
+- restrict no-transaction `DEBUG` messages to the active application, retry count, session batch count/limit, wait count, and master-queue run count
+- record handled business failures at `WARNING`
+- record handled technical failures at `ERROR`
+- record unexpected raised exceptions with the exception message and traceback
+- avoid logging document contents and extracted OCR output
+- prevent customer data, parsed case payloads, process results, and OCR values from being interpolated into transaction-fetch or transition-input messages
 
 ### 13.2 Logging Configuration
 

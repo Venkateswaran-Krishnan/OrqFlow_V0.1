@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
+import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -21,9 +24,12 @@ class DatabaseQueue:
 
     def fetch_next(self) -> dict | None:
         queue_config = _queue_config(self.state)
+        application_id = self.state["runtime_config"].get("active_application_id")
+        if application_id is None:
+            raise ValueError("runtime_config.active_application_id is required")
         cursor = self.db.connection.execute(
             self.db.queries["fetch_next_transaction"],
-            [queue_config["eligible_status"]],
+            [queue_config["eligible_status"], application_id],
         )
         row = cursor.fetchone()
         if row is None:
@@ -43,6 +49,13 @@ class DatabaseQueue:
         txn["case_json"] = _parse_case_json(txn.get("input_case_json"))
         return txn
 
+    def has_eligible_transactions(self) -> bool:
+        cursor = self.db.connection.execute(
+            self.db.queries["fetch_any_eligible_transaction"],
+            [_queue_config(self.state)["eligible_status"]],
+        )
+        return cursor.fetchone() is not None
+
     def mark_success(self, txn: dict) -> None:
         self._mark_final(txn, "mark_transaction_success", _queue_config(self.state)["success_status"], None)
 
@@ -55,6 +68,7 @@ class DatabaseQueue:
     def _mark_final(self, txn: dict, query_name: str, status: str, reason: str | None) -> None:
         if txn is None:
             return
+        logger = get_logger("runtime.queue")
         self.db.connection.execute(
             self.db.queries[query_name],
             [status, reason, reason, reason, reason, txn["queue_id"]],
@@ -62,15 +76,34 @@ class DatabaseQueue:
         self.db.connection.commit()
         txn["queue_processing_status"] = status
         txn["queue_bot_comment"] = reason
+        logger.info("Queue transaction status updated")
+        logger.debug(
+            "Queue transaction status details: queue_id=%s, status=%s, reason=%s",
+            txn["queue_id"],
+            status,
+            reason,
+        )
 
 
 def create_master_queue(state: OrqflowState) -> OrqflowState:
     logger = get_logger("runtime.queue")
     if not _is_master_queue_enabled(state):
+        logger.info("Master queue creation skipped; masterbot is disabled")
         logger.debug("Master queue loading skipped")
         return state
 
     try:
+        if not is_master_queue_due(state):
+            runtime = state["runtime_config"]
+            logger.info("Master queue creation skipped; configured schedule is not due")
+            logger.debug(
+                "Master queue schedule details: run_count=%s, last_run_at=%s, interval_hours=%s",
+                runtime.get("master_queue_run_count"),
+                runtime.get("master_queue_last_run_at"),
+                master_queue_interval_hours(state),
+            )
+            return state
+
         dataframe = _load_input_dataframe(state)
         process_id = _process_id(state)
         application_ids = _extract_distinct_process_applications(state)
@@ -85,14 +118,23 @@ def create_master_queue(state: OrqflowState) -> OrqflowState:
         )
         state["runtime_config"]["input_load_summary"] = input_summary
         state["runtime_config"]["queue_creation_summary"] = queue_summary
-        logger.info(
-            "Master queue created. Inputs inserted: %s, input rows failed/skipped: %s, "
+        record_master_queue_run(state)
+        logger.info("Master queue creation completed")
+        logger.debug(
+            "Master queue created. Inputs inserted: %s, input rows skipped: %s, "
+            "input rows failed: %s, "
             "inputs queued: %s, queue rows created: %s, queue inputs failed: %s",
             input_summary["inserted_count"],
+            input_summary["skipped_count"],
             input_summary["failed_count"],
             queue_summary["queued_input_count"],
             queue_summary["created_queue_count"],
             queue_summary["failed_input_count"],
+        )
+        logger.debug(
+            "Master queue summaries: input_summary=%s, queue_summary=%s",
+            input_summary,
+            queue_summary,
         )
     except Exception as error:
         logger.exception("Master queue input loading failed")
@@ -118,7 +160,18 @@ def get_next_transaction(state: OrqflowState) -> OrqflowState:
         runtime["txn"] = None
         runtime["last_status"] = Outcome.NO_TRANSACTION
         runtime["next_action"] = None
-        logger.debug("No transaction available. Runtime: %s", runtime)
+        logger.info("No transaction available")
+        logger.debug(
+            "No transaction details: application_id=%s, retry_count=%s, "
+            "session_batch_count=%s, batch_limit=%s, wait_count=%s, "
+            "master_queue_run_count=%s",
+            runtime.get("active_application_id"),
+            runtime.get("retry_count"),
+            runtime.get("session_batch_count"),
+            runtime.get("active_batch_limit"),
+            runtime.get("wait_count"),
+            runtime.get("master_queue_run_count"),
+        )
         return state
 
     runtime["txn"] = txn
@@ -127,7 +180,13 @@ def get_next_transaction(state: OrqflowState) -> OrqflowState:
     runtime["last_status"] = Outcome.SUCCESS
     runtime["last_error"] = None
     runtime["next_action"] = "PROCESS"
-    logger.debug("Transaction fetched: %s", txn)
+    logger.info("Transaction fetched and marked in progress")
+    logger.debug(
+        "Transaction details: queue_id=%s, input_id=%s, application_id=%s",
+        txn.get("queue_id"),
+        txn.get("input_id"),
+        txn.get("queue_application_details"),
+    )
     return state
 
 
@@ -151,6 +210,124 @@ def _ensure_queue_initialized(state: OrqflowState) -> None:
 def _is_master_queue_enabled(state: OrqflowState) -> bool:
     settings = state.get("config", {}).get("process_config", {}).get("settings", {})
     return settings.get("masterbot") is True
+
+
+def master_queue_interval_hours(state: OrqflowState) -> Decimal | None:
+    settings = state.get("config", {}).get("process_config", {}).get("settings", {})
+    value = settings.get("master_queue_interval_hours")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+
+    try:
+        interval = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(
+            "process_config.settings.master_queue_interval_hours must be a non-negative number"
+        ) from error
+
+    if not interval.is_finite() or interval < 0:
+        raise ValueError(
+            "process_config.settings.master_queue_interval_hours must be a non-negative number"
+        )
+    return None if interval == 0 else interval
+
+
+def is_master_queue_due(state: OrqflowState, now: datetime | None = None) -> bool:
+    if not _is_master_queue_enabled(state):
+        return False
+
+    interval = master_queue_interval_hours(state)
+    runtime = state["runtime_config"]
+    run_count = _nonnegative_runtime_integer(
+        runtime.get("master_queue_run_count", 0),
+        "runtime_config.master_queue_run_count",
+    )
+    if run_count == 0:
+        return True
+    if interval is None:
+        return False
+
+    last_run_at = runtime.get("master_queue_last_run_at")
+    if not isinstance(last_run_at, datetime) or last_run_at.tzinfo is None:
+        raise ValueError(
+            "runtime_config.master_queue_last_run_at must be a timezone-aware datetime"
+        )
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        raise ValueError("Master queue schedule time must be timezone-aware")
+    return current_time >= last_run_at + timedelta(hours=float(interval))
+
+
+def record_master_queue_run(
+    state: OrqflowState,
+    now: datetime | None = None,
+) -> OrqflowState:
+    runtime = state["runtime_config"]
+    run_count = _nonnegative_runtime_integer(
+        runtime.get("master_queue_run_count", 0),
+        "runtime_config.master_queue_run_count",
+    )
+    completed_at = now or datetime.now(timezone.utc)
+    if completed_at.tzinfo is None:
+        raise ValueError("Master queue completion time must be timezone-aware")
+
+    runtime["master_queue_run_count"] = run_count + 1
+    runtime["master_queue_last_run_at"] = completed_at.astimezone(timezone.utc)
+    return state
+
+
+def wait_for_master_queue_schedule(state: OrqflowState) -> OrqflowState:
+    runtime = state["runtime_config"]
+    logger = get_logger("runtime.queue")
+    try:
+        if master_queue_interval_hours(state) is None:
+            raise ValueError("A positive master_queue_interval_hours value is required")
+
+        wait_seconds = _positive_wait_seconds(state)
+        logger.info("Waiting for the next master queue schedule check")
+        logger.debug(
+            "Master queue wait details: wait_seconds=%s, run_count=%s, last_run_at=%s",
+            wait_seconds,
+            runtime.get("master_queue_run_count"),
+            runtime.get("master_queue_last_run_at"),
+        )
+        time.sleep(wait_seconds)
+        runtime["wait_count"] = _nonnegative_runtime_integer(
+            runtime.get("wait_count", 0),
+            "runtime_config.wait_count",
+        ) + 1
+        runtime["execution_init_reason"] = "MASTER_QUEUE_REFRESH"
+        runtime["next_action"] = "MASTER_QUEUE_REFRESH"
+    except Exception as error:
+        logger.exception("Master queue schedule wait failed")
+        _set_runtime_failure(state, error)
+    return state
+
+
+def _nonnegative_runtime_integer(value: object, name: str) -> int:
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(f"{name} must be a non-negative integer") from error
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        raise ValueError(f"{name} must be a non-negative integer")
+    return int(number)
+
+
+def _positive_wait_seconds(state: OrqflowState) -> float:
+    value = state.get("config", {}).get("execution_config", {}).get("wait_seconds")
+    try:
+        seconds = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(
+            "execution_config.wait_seconds must be a positive number when periodic masterbot is enabled"
+        ) from error
+    if not seconds.is_finite() or seconds <= 0:
+        raise ValueError(
+            "execution_config.wait_seconds must be a positive number when periodic masterbot is enabled"
+        )
+    return float(seconds)
 
 
 def _resolve_queue_file_path(state: OrqflowState) -> Path:
@@ -207,6 +384,7 @@ def _load_api_dataframe(state: OrqflowState) -> Any:
 def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, Any]:
     process_id = _process_id(state)
     db = _active_queue_db(state)
+    logger = get_logger("runtime.queue")
 
     db_schema = _tbl_input_schema(db)
     db_columns = set(db_schema)
@@ -241,8 +419,10 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
 
     summary: dict[str, Any] = {
         "inserted_count": 0,
+        "skipped_count": 0,
         "failed_count": 0,
         "inserted_input_ids": [],
+        "skipped_rows": [],
         "failed_rows": [],
     }
     for row_index, row in dataframe.iterrows():
@@ -251,6 +431,12 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         if row_error is not None:
             summary["failed_rows"].append({"row": excel_row_number, "error": row_error})
             summary["failed_count"] += 1
+            logger.warning("Input row rejected during validation")
+            logger.debug(
+                "Input row validation failure: row=%s, error=%s",
+                excel_row_number,
+                row_error,
+            )
             continue
 
         values = []
@@ -267,15 +453,39 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
             db.connection.commit()
         except Exception as error:
             db.connection.rollback()
+            if _is_duplicate_input_error(error, db.db_type):
+                summary["skipped_rows"].append({"row": excel_row_number})
+                summary["skipped_count"] += 1
+                logger.info("Existing input row skipped")
+                logger.debug("Existing input row skipped: row=%s", excel_row_number)
+                continue
             summary["failed_rows"].append(
                 {"row": excel_row_number, "error": f"DB insert failed: {error}"}
             )
             summary["failed_count"] += 1
+            logger.error("Input row database insert failed", exc_info=True)
+            logger.debug(
+                "Input row database failure: row=%s, error=%s",
+                excel_row_number,
+                error,
+            )
             continue
         summary["inserted_count"] += 1
         summary["inserted_input_ids"].append(cursor.lastrowid)
 
     return summary
+
+
+def _is_duplicate_input_error(error: Exception, db_type: str) -> bool:
+    if db_type == "sqlite":
+        unique_error_code = getattr(sqlite3, "SQLITE_CONSTRAINT_UNIQUE", 2067)
+        return isinstance(error, sqlite3.IntegrityError) and (
+            getattr(error, "sqlite_errorcode", None) == unique_error_code
+            or "UNIQUE constraint failed" in str(error)
+        )
+    if db_type == "mysql":
+        return getattr(error, "errno", None) == 1062
+    return False
 
 
 def _extract_distinct_process_applications(state: OrqflowState) -> list[int]:
@@ -394,6 +604,7 @@ def _create_queues_for_eligible_inputs(
     application_ids: list[int],
 ) -> dict[str, Any]:
     db = _active_queue_db(state)
+    logger = get_logger("runtime.queue")
     eligible_inputs = _select_eligible_inputs(state, process_id)
     summary: dict[str, Any] = {
         "distinct_application_count": len(application_ids),
@@ -419,6 +630,12 @@ def _create_queues_for_eligible_inputs(
             db.connection.rollback()
             summary["failed_input_count"] += 1
             summary["failed_inputs"].append({"input_id": input_id, "error": str(error)})
+            logger.error("Queue creation failed for an input", exc_info=True)
+            logger.debug(
+                "Queue creation failure: input_id=%s, error=%s",
+                input_id,
+                error,
+            )
             continue
         summary["queued_input_count"] += 1
         summary["created_queue_count"] += created_count

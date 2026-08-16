@@ -72,7 +72,15 @@ SELECT
 FROM tbl_queue q
 JOIN tbl_input i ON i.ID = q.Case_Details
 WHERE q.Processing_Status = ?
+  AND q.Application_Details = ?
 ORDER BY q.ID
+LIMIT 1;
+
+-- name: fetch_any_eligible_transaction
+SELECT ID
+FROM tbl_queue
+WHERE Processing_Status = ?
+ORDER BY ID
 LIMIT 1;
 
 -- name: mark_transaction_in_progress

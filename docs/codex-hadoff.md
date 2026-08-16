@@ -987,7 +987,7 @@ Current workbook check:
 ```text
 share/config/orqflow_v0_1/KeySteps.xlsx
 shape: (1, 7)
-columns: Sequence, Bot, State, BatchCount, Application, Moduel, Status
+columns: Sequence, Bot, State, BatchCount, Application, Module, Status
 ```
 
 Current state shape:
@@ -1114,3 +1114,140 @@ Result:
 Operational note:
 
 - The saved `KeySteps.xlsx` must contain valid numeric application IDs on its `PROCESS_TRANSACTION` rows before master queue creation can run successfully.
+
+## 2026-08-15 Process Runtime, Routing, and Logging Update
+
+Framework routing:
+
+- `framework_init` now routes conditionally: successful initialization continues to `execution_init`; initialization failure with `next_action = END` routes directly to cleanup and graph end.
+- A `SYSTEM_EXCEPTION` retries according to `execution_config.retry_limit`.
+- When retries are exhausted and there is no active transaction, `transition_hub` routes to `END` instead of returning to `GET_TRANSACTION`.
+
+Process-module execution:
+
+- Added `framework/runtime/process_runtime.py`.
+- `PROCESS_TRANSACTION` now selects the active application's matching KeySteps row using `queue_application_details`, `State = PROCESS_TRANSACTION`, and numeric `Sequence`.
+- The KeySteps column is named `Module`.
+- `Module` uses `package.module:function` format, for example `image_value_extraction.runtime:run_process`.
+- The callable receives shared state and returns a mapping with `outcome` and optional `message`, `data`, and `next_action`.
+- The framework validates returned outcomes and converts loading, invocation, or result-contract failures into `SYSTEM_EXCEPTION`.
+
+Logging:
+
+- Every graph node records an `INFO` entry event.
+- Lifecycle and transition outcomes are logged at `INFO`.
+- Operational values are logged at `DEBUG`; the complete effective configuration was moved from `INFO` to `DEBUG`.
+- Business exceptions and rejected input rows are logged at `WARNING`.
+- Technical failures are logged at `ERROR`, and unexpected raised exceptions include their message and traceback.
+- Queue failure/skip reasons, row numbers, queue/input identifiers, module selection, and transition state are available at `DEBUG`.
+- Document contents and extracted OCR results are intentionally not logged.
+
+Verification:
+
+- Added `tests/test_process_runtime.py`.
+- Full test result after these updates: `31 tests passed`.
+- Framework and project wheels have not yet been rebuilt or redeployed.
+
+## 2026-08-16 Safe Logging and Duplicate-Input Handling
+
+Safe logging:
+
+- Transaction-fetch `DEBUG` messages use an explicit safe-field list: `queue_id`, `input_id`, and `application_id`.
+- Transition-input `DEBUG` messages use an explicit safe-field list: outcome, queue ID, retry count, batch count, wait count, and requested action.
+- Complete transaction dictionaries, runtime dictionaries, process results, document contents, customer data, and OCR output are not included in those messages.
+- `tests/test_safe_logging.py` uses sentinel customer/OCR values and asserts that they cannot appear in captured transaction or transition messages.
+- Lifecycle milestones remain at `INFO`, operational values remain at `DEBUG`, handled business failures remain at `WARNING`, and genuine technical failures remain at `ERROR` with tracebacks where appropriate.
+
+Safe-logging deployment:
+
+- Framework `0.1.2` was built and installed into `OrqFlow_Wheel_Test\.venv`.
+- A smoke test executed against the installed package and both safe-logging regression tests passed.
+- An existing log created before the safe-logging deployment was intentionally not changed or deleted.
+
+Duplicate input handling:
+
+- `tbl_input.Input_Identifier` continues to be enforced by the database as the idempotency key.
+- SQLite unique-constraint errors and MySQL duplicate-key error `1062` are recognized as expected duplicate inputs.
+- Duplicate rows are rolled back, logged at `INFO` without a traceback, counted in `input_load_summary.skipped_count`, and listed by Excel row number in `input_load_summary.skipped_rows`.
+- Duplicate rows no longer increment `failed_count` or appear in `failed_rows`.
+- Non-duplicate insert exceptions retain `ERROR` logging, rollback, failure summary details, and traceback behavior.
+- The master queue summary now reports inserted, skipped, and failed input counts separately.
+
+Verification:
+
+- Added SQLite behavior coverage plus MySQL duplicate classification and non-duplicate error regression tests in `tests/test_excel_master_queue.py`.
+- Full framework source suite: `35 tests passed`.
+
+Release status:
+
+- The duplicate-input change currently exists only in framework source.
+- The already installed `framework 0.1.2` contains the safe-logging change but not the later duplicate-input change.
+- Use a new `0.1.3` release before deploying the duplicate-input behavior; do not rebuild a different artifact under the existing `0.1.2` version.
+
+## 2026-08-16 Application Batch Scheduler and Masterbot Scheduling
+
+Scheduler behavior:
+
+- `FRAMEWORK_INIT` validates and stores ordered `PROCESS_TRANSACTION` KeySteps definitions.
+- Each process row owns its `BatchCount`: blank/zero means all eligible work; a positive integer limits finalized transactions in one application session; negative, decimal, and nonnumeric values are rejected.
+- Runtime tracks the active step index, application ID, batch limit, and per-session finalized transaction count.
+- Transaction fetch SQL now filters by `Application_Details`; a separate global eligibility query supports application switching and final completion decisions for both SQLite and MySQL.
+- Success, skipped business exceptions, and retry-exhausted failures increment the session count. Retry attempts do not.
+- Completed batches route through `EXECUTION_INIT`, reset the application session, and advance cyclically through process applications instead of ending the framework.
+
+Execution initialization:
+
+- Added `framework/runtime/execution_init_runtime.py` and connected the `execution_init` graph node to it.
+- Supported reasons are `STARTUP`, `BATCH_COMPLETE`, `APP_SWITCH`, `RETRY`, and `MASTER_QUEUE_REFRESH`.
+- Optional application-specific reset hooks come from matching `EXECUTION_INIT` KeySteps rows using `package.module:function`.
+- Batch completion and application switching run the current application's reset hook, reset the session, and activate the next ordered process step.
+- Retry runs the same application's reset hook, preserves the transaction/application, resets the session, and routes directly to login/process without fetching another transaction.
+
+Masterbot scheduling:
+
+- `masterbot: false` never runs queue creation.
+- Blank/zero `master_queue_interval_hours` runs once per framework execution.
+- A positive interval runs at startup and when the configured hours have elapsed; decimals are supported.
+- Successful runs record a count and UTC timestamp; failed runs are not recorded as successful.
+- Added `MASTER_QUEUE_WAIT`, which uses positive `execution_config.wait_seconds` polling and rejects values that could create a busy loop.
+
+Routing and cleanup:
+
+- An empty active application switches when another application has globally eligible work.
+- When the global queue is empty, the current application session closes/resets before periodic wait or final `END` selection.
+- Terminal cleanup now sets `runtime_config.next_action = "END"` after resource cleanup.
+- Transition wait diagnostics no longer log the complete runtime dictionary.
+
+Verification:
+
+- Added execution-init, transition, scheduler-routing, and compiled-graph integration tests.
+- The compiled graph processed simulated work in the expected order: `13-A`, `13-B`, `14-A`, `13-C`, `14-B`.
+- Full source suite after the terminal-state fix: `74 tests passed`.
+- These scheduler changes are assigned to framework release `0.1.4` and are included in the release commit.
+- Source verification completed with `74 tests passed`.
+- Built artifact: `dist/framework-0.1.4-py3-none-any.whl`.
+- Artifact SHA-256: `7466BCAACFC92898F0F94DAC388B3BFF7018DEDE6AB6A2F76EC9AD4CCCFAC4DE`.
+- The `0.1.4` wheel has not yet been installed or deployed; do not rebuild a different artifact under this version.
+
+## 2026-08-16 No-Transaction Retry Guard
+
+- A queue-fetch or framework system exception can occur before an active transaction is assigned.
+- `TRANSITION_HUB` now checks for `txn is None` before evaluating the retry limit.
+- Without an active transaction, the framework resets `retry_count` and routes directly to `END`; it does not enter login or `PROCESS_TRANSACTION`.
+- System exceptions with an active transaction retain the configured retry behavior.
+- Added a regression test covering the no-transaction system-exception path.
+- This correction is assigned to framework release `0.1.5`.
+- Full source verification: `75 tests passed`.
+- Built artifact: `dist/framework-0.1.5-py3-none-any.whl`.
+- Artifact SHA-256: `6D2F58E9BC73D5E76097914310DCF8DA42C5D3F1B2EC2DA7E69F6FB40D80792D`.
+
+## 2026-08-16 Safe No-Transaction Logging
+
+- The no-transaction queue path previously logged the complete `runtime_config` dictionary at `DEBUG`.
+- That dictionary can retain process results, OCR output, customer values, and error payloads from earlier transactions.
+- The message now uses an explicit safe-field list: active application ID, retry count, session batch count/limit, wait count, and master-queue run count.
+- Added a sensitive-sentinel regression test proving `last_result`, OCR values, and error payloads cannot appear in this message.
+- This correction is assigned to framework release `0.1.6`.
+- Full source verification: `76 tests passed`.
+- Built artifact: `dist/framework-0.1.6-py3-none-any.whl`.
+- Artifact SHA-256: `FABCA9C14CA31154494F330D60F6616143174BC0845EBD2A6AEE5B20AC1CC3BA`.
