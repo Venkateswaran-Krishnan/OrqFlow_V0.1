@@ -1,6 +1,6 @@
 [project]
 name = "framework"
-version = "0.1.4"
+version = "0.1.5"
 description = "LangGraph-first automation framework skeleton for Playwright-driven RPA flows."
 requires-python = ">=3.11"
 dependencies = [

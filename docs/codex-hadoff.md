@@ -1228,3 +1228,15 @@ Verification:
 - Built artifact: `dist/framework-0.1.4-py3-none-any.whl`.
 - Artifact SHA-256: `7466BCAACFC92898F0F94DAC388B3BFF7018DEDE6AB6A2F76EC9AD4CCCFAC4DE`.
 - The `0.1.4` wheel has not yet been installed or deployed; do not rebuild a different artifact under this version.
+
+## 2026-08-16 No-Transaction Retry Guard
+
+- A queue-fetch or framework system exception can occur before an active transaction is assigned.
+- `TRANSITION_HUB` now checks for `txn is None` before evaluating the retry limit.
+- Without an active transaction, the framework resets `retry_count` and routes directly to `END`; it does not enter login or `PROCESS_TRANSACTION`.
+- System exceptions with an active transaction retain the configured retry behavior.
+- Added a regression test covering the no-transaction system-exception path.
+- This correction is assigned to framework release `0.1.5`.
+- Full source verification: `75 tests passed`.
+- Built artifact: `dist/framework-0.1.5-py3-none-any.whl`.
+- Artifact SHA-256: `6D2F58E9BC73D5E76097914310DCF8DA42C5D3F1B2EC2DA7E69F6FB40D80792D`.

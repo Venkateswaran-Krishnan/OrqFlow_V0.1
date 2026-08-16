@@ -68,6 +68,17 @@ class TransitionRuntimeTests(unittest.TestCase):
         self.assertEqual(1, state["runtime_config"]["retry_count"])
         self.assertEqual("RETRY", state["runtime_config"]["next_action"])
 
+    def test_system_exception_without_transaction_ends_without_retry(self) -> None:
+        state = self._state(Outcome.SYSTEM_EXCEPTION, batch_limit=2, session_count=0)
+        state["runtime_config"]["txn"] = None
+
+        resolve_transition(state)
+
+        self.assertEqual(0, state["runtime_config"]["retry_count"])
+        self.assertEqual("END", state["runtime_config"]["next_action"])
+        self.assertEqual(0, state["runtime_config"]["session_batch_count"])
+        self.assertEqual([], state["queue"].failed)
+
     def test_exhausted_retry_marks_failed_and_counts_final_transaction(self) -> None:
         state = self._state(Outcome.SYSTEM_EXCEPTION, batch_limit=2, session_count=1)
         state["runtime_config"]["retry_count"] = 1

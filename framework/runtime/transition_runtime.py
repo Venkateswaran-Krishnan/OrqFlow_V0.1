@@ -48,16 +48,16 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
         return state
 
     if outcome == Outcome.SYSTEM_EXCEPTION:
-        if runtime.get("retry_count", 0) < _execution_config(state).get("retry_limit", 0):
-            runtime["retry_count"] = runtime.get("retry_count", 0) + 1
-            runtime["next_action"] = "RETRY"
-            logger.info("System-exception retry selected")
-            return state
-
         if txn is None:
             runtime["retry_count"] = 0
             runtime["next_action"] = "END"
             logger.info("System-exception transition ended without an active transaction")
+            return state
+
+        if runtime.get("retry_count", 0) < _execution_config(state).get("retry_limit", 0):
+            runtime["retry_count"] = runtime.get("retry_count", 0) + 1
+            runtime["next_action"] = "RETRY"
+            logger.info("System-exception retry selected")
             return state
 
         state["queue"].mark_failed(txn, runtime.get("last_error"))
