@@ -1240,3 +1240,14 @@ Verification:
 - Full source verification: `75 tests passed`.
 - Built artifact: `dist/framework-0.1.5-py3-none-any.whl`.
 - Artifact SHA-256: `6D2F58E9BC73D5E76097914310DCF8DA42C5D3F1B2EC2DA7E69F6FB40D80792D`.
+
+## 2026-08-16 Safe No-Transaction Logging
+
+- The no-transaction queue path previously logged the complete `runtime_config` dictionary at `DEBUG`.
+- That dictionary can retain process results, OCR output, customer values, and error payloads from earlier transactions.
+- The message now uses an explicit safe-field list: active application ID, retry count, session batch count/limit, wait count, and master-queue run count.
+- Added a sensitive-sentinel regression test proving `last_result`, OCR values, and error payloads cannot appear in this message.
+- This correction is assigned to framework release `0.1.6`.
+- Full source verification: `76 tests passed`.
+- Built artifact: `dist/framework-0.1.6-py3-none-any.whl`.
+- Artifact SHA-256: `FABCA9C14CA31154494F330D60F6616143174BC0845EBD2A6AEE5B20AC1CC3BA`.

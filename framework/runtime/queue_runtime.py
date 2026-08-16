@@ -161,7 +161,17 @@ def get_next_transaction(state: OrqflowState) -> OrqflowState:
         runtime["last_status"] = Outcome.NO_TRANSACTION
         runtime["next_action"] = None
         logger.info("No transaction available")
-        logger.debug("No transaction available. Runtime: %s", runtime)
+        logger.debug(
+            "No transaction details: application_id=%s, retry_count=%s, "
+            "session_batch_count=%s, batch_limit=%s, wait_count=%s, "
+            "master_queue_run_count=%s",
+            runtime.get("active_application_id"),
+            runtime.get("retry_count"),
+            runtime.get("session_batch_count"),
+            runtime.get("active_batch_limit"),
+            runtime.get("wait_count"),
+            runtime.get("master_queue_run_count"),
+        )
         return state
 
     runtime["txn"] = txn

@@ -826,6 +826,7 @@ Logging shall:
 - restrict transition-input `DEBUG` messages to outcome, queue ID, retry count, batch count, wait count, and requested action
 - restrict execution-initialization and scheduler `DEBUG` messages to safe operational fields such as reason, application IDs, limits, counts, timestamps, and selected module
 - do not dump the complete runtime dictionary while waiting for transactions
+- restrict no-transaction `DEBUG` messages to the active application, retry count, session batch count/limit, wait count, and master-queue run count
 - record handled business failures at `WARNING`
 - record handled technical failures at `ERROR`
 - record unexpected raised exceptions with the exception message and traceback
