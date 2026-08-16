@@ -59,13 +59,13 @@ Framework startup behavior. Loads `KeySteps.xlsx` and initializes the configured
 Application login behavior. Skips login after it has already completed for the current execution.
 
 `framework/runtime/queue_runtime.py`  
-Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment.
+Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
 
 `framework/runtime/process_runtime.py`
 Selects the active application's `PROCESS_TRANSACTION` row from `KeySteps.xlsx`, imports the configured `package.module:function`, executes it, validates its result, and maps failures to framework outcomes.
 
 `framework/runtime/transition_runtime.py`  
-Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end.
+Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end. Transition-input diagnostics use an explicit safe-field list rather than logging complete runtime state.
 
 `framework/runtime/cleanup_runtime.py`  
 Stops the browser driver, closes the queue database connection, and logs cleanup progress.
@@ -90,10 +90,13 @@ Repo-local shared config model, including global config, project config, app mod
 ## Tests
 
 `tests/test_excel_master_queue.py`
-Covers input loading, queue creation, database status updates, transaction fetching, and queue failure behavior.
+Covers input loading, queue creation, SQLite/MySQL duplicate-input recognition, informational skip behavior, database status updates, transaction fetching, and genuine queue failure behavior.
 
 `tests/test_process_runtime.py`
 Covers configured process-module execution, returned results, missing application configuration, module exceptions, and exception-message logging.
+
+`tests/test_safe_logging.py`
+Covers the transaction-fetch and transition-input safe-field allowlists and verifies that customer and OCR sentinel values cannot appear in those DEBUG messages.
 
 ## Removed During Earlier Cleanup
 

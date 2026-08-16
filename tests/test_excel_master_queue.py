@@ -9,7 +9,11 @@ import pandas as pd
 from openpyxl import Workbook
 
 from framework.runtime.queue_db import SQLiteQueueDatabase, load_queue_queries
-from framework.runtime.queue_runtime import create_master_queue, get_next_transaction
+from framework.runtime.queue_runtime import (
+    _is_duplicate_input_error,
+    create_master_queue,
+    get_next_transaction,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -215,7 +219,8 @@ class ExcelMasterQueueTests(unittest.TestCase):
         )
         state = self._state(queue_file=workbook_path.name)
 
-        create_master_queue(state)
+        with self.assertLogs("framework.runtime.queue", level="INFO") as logs:
+            create_master_queue(state)
 
         summary = state["runtime_config"]["input_load_summary"]
         rows = self.db.connection.execute(
@@ -226,9 +231,28 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual(["12_CASE-1", "12_CASE-2"], [row["Input_Identifier"] for row in rows])
         self.assertTrue(all(row["Status"] == "Queue Created" for row in rows))
         self.assertEqual(2, summary["inserted_count"])
-        self.assertEqual(1, summary["failed_count"])
-        self.assertIn("DB insert failed", summary["failed_rows"][0]["error"])
+        self.assertEqual(1, summary["skipped_count"])
+        self.assertEqual([{"row": 3}], summary["skipped_rows"])
+        self.assertEqual(0, summary["failed_count"])
+        self.assertEqual([], summary["failed_rows"])
+        self.assertIn("Existing input row skipped", "\n".join(logs.output))
+        self.assertNotIn("ERROR", "\n".join(logs.output))
         self.assertEqual(4, self._count("tbl_queue"))
+
+    def test_mysql_duplicate_key_error_is_recognized(self) -> None:
+        class FakeMySQLDuplicateError(Exception):
+            errno = 1062
+
+        self.assertTrue(
+            _is_duplicate_input_error(FakeMySQLDuplicateError("Duplicate entry"), "mysql")
+        )
+
+    def test_nonduplicate_database_error_is_not_recognized(self) -> None:
+        class FakeMySQLError(Exception):
+            errno = 1048
+
+        self.assertFalse(_is_duplicate_input_error(FakeMySQLError("Column cannot be null"), "mysql"))
+        self.assertFalse(_is_duplicate_input_error(sqlite3.IntegrityError("NOT NULL failed"), "sqlite"))
 
     def test_distinct_applications_follow_first_sequence_order(self) -> None:
         workbook_path = self._write_excel(

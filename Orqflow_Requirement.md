@@ -553,6 +553,8 @@ The complete schema for these tables must be captured before implementation reli
 - Master queue creation shall accept supplied items as a DataFrame, whether the upstream source is Excel or an API call.
 - Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then create one linked `tbl_queue` row for each distinct application in the sequenced `PROCESS_TRANSACTION` KeySteps.
 - Queue creation shall consider only inputs for the configured process whose status is null or blank. The complete application queue set and the input's queue-created status/timestamp shall commit atomically per input.
+- `tbl_input.Input_Identifier` remains the database-enforced idempotency key. When an input identifier already exists, master queue loading shall roll back that row, record it as skipped, log the expected condition at `INFO` without a traceback, and continue. It shall not classify the duplicate as a failed input.
+- Non-duplicate database insert failures shall remain failed rows and shall be logged at `ERROR` with exception details.
 - Runtime transaction context shall include queue fields, input fields, and parsed `tbl_input.Case_Json` for process use.
 - `get_transaction` shall mark the selected queue item as `In Processing` and set `ProcessingSTART_timestamp`.
 - `process_transaction` may update runtime queue columns such as `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
@@ -766,10 +768,13 @@ Logging shall:
 - record unhandled framework execution errors with stack traces
 - record node entry, lifecycle progress, and transition outcomes at `INFO`
 - keep detailed configuration, transaction, application, queue, and process values at `DEBUG`
+- restrict transaction-fetch `DEBUG` messages to `queue_id`, `input_id`, and `application_id`
+- restrict transition-input `DEBUG` messages to outcome, queue ID, retry count, batch count, wait count, and requested action
 - record handled business failures at `WARNING`
 - record handled technical failures at `ERROR`
 - record unexpected raised exceptions with the exception message and traceback
 - avoid logging document contents and extracted OCR output
+- prevent customer data, parsed case payloads, process results, and OCR values from being interpolated into transaction-fetch or transition-input messages
 
 ### 13.2 Logging Configuration
 

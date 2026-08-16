@@ -1147,3 +1147,39 @@ Verification:
 - Added `tests/test_process_runtime.py`.
 - Full test result after these updates: `31 tests passed`.
 - Framework and project wheels have not yet been rebuilt or redeployed.
+
+## 2026-08-16 Safe Logging and Duplicate-Input Handling
+
+Safe logging:
+
+- Transaction-fetch `DEBUG` messages use an explicit safe-field list: `queue_id`, `input_id`, and `application_id`.
+- Transition-input `DEBUG` messages use an explicit safe-field list: outcome, queue ID, retry count, batch count, wait count, and requested action.
+- Complete transaction dictionaries, runtime dictionaries, process results, document contents, customer data, and OCR output are not included in those messages.
+- `tests/test_safe_logging.py` uses sentinel customer/OCR values and asserts that they cannot appear in captured transaction or transition messages.
+- Lifecycle milestones remain at `INFO`, operational values remain at `DEBUG`, handled business failures remain at `WARNING`, and genuine technical failures remain at `ERROR` with tracebacks where appropriate.
+
+Safe-logging deployment:
+
+- Framework `0.1.2` was built and installed into `OrqFlow_Wheel_Test\.venv`.
+- A smoke test executed against the installed package and both safe-logging regression tests passed.
+- An existing log created before the safe-logging deployment was intentionally not changed or deleted.
+
+Duplicate input handling:
+
+- `tbl_input.Input_Identifier` continues to be enforced by the database as the idempotency key.
+- SQLite unique-constraint errors and MySQL duplicate-key error `1062` are recognized as expected duplicate inputs.
+- Duplicate rows are rolled back, logged at `INFO` without a traceback, counted in `input_load_summary.skipped_count`, and listed by Excel row number in `input_load_summary.skipped_rows`.
+- Duplicate rows no longer increment `failed_count` or appear in `failed_rows`.
+- Non-duplicate insert exceptions retain `ERROR` logging, rollback, failure summary details, and traceback behavior.
+- The master queue summary now reports inserted, skipped, and failed input counts separately.
+
+Verification:
+
+- Added SQLite behavior coverage plus MySQL duplicate classification and non-duplicate error regression tests in `tests/test_excel_master_queue.py`.
+- Full framework source suite: `35 tests passed`.
+
+Release status:
+
+- The duplicate-input change currently exists only in framework source.
+- The already installed `framework 0.1.2` contains the safe-logging change but not the later duplicate-input change.
+- Use a new `0.1.3` release before deploying the duplicate-input behavior; do not rebuild a different artifact under the existing `0.1.2` version.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -96,9 +97,11 @@ def create_master_queue(state: OrqflowState) -> OrqflowState:
         state["runtime_config"]["queue_creation_summary"] = queue_summary
         logger.info("Master queue creation completed")
         logger.debug(
-            "Master queue created. Inputs inserted: %s, input rows failed/skipped: %s, "
+            "Master queue created. Inputs inserted: %s, input rows skipped: %s, "
+            "input rows failed: %s, "
             "inputs queued: %s, queue rows created: %s, queue inputs failed: %s",
             input_summary["inserted_count"],
+            input_summary["skipped_count"],
             input_summary["failed_count"],
             queue_summary["queued_input_count"],
             queue_summary["created_queue_count"],
@@ -264,8 +267,10 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
 
     summary: dict[str, Any] = {
         "inserted_count": 0,
+        "skipped_count": 0,
         "failed_count": 0,
         "inserted_input_ids": [],
+        "skipped_rows": [],
         "failed_rows": [],
     }
     for row_index, row in dataframe.iterrows():
@@ -296,6 +301,12 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
             db.connection.commit()
         except Exception as error:
             db.connection.rollback()
+            if _is_duplicate_input_error(error, db.db_type):
+                summary["skipped_rows"].append({"row": excel_row_number})
+                summary["skipped_count"] += 1
+                logger.info("Existing input row skipped")
+                logger.debug("Existing input row skipped: row=%s", excel_row_number)
+                continue
             summary["failed_rows"].append(
                 {"row": excel_row_number, "error": f"DB insert failed: {error}"}
             )
@@ -311,6 +322,18 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         summary["inserted_input_ids"].append(cursor.lastrowid)
 
     return summary
+
+
+def _is_duplicate_input_error(error: Exception, db_type: str) -> bool:
+    if db_type == "sqlite":
+        unique_error_code = getattr(sqlite3, "SQLITE_CONSTRAINT_UNIQUE", 2067)
+        return isinstance(error, sqlite3.IntegrityError) and (
+            getattr(error, "sqlite_errorcode", None) == unique_error_code
+            or "UNIQUE constraint failed" in str(error)
+        )
+    if db_type == "mysql":
+        return getattr(error, "errno", None) == 1062
+    return False
 
 
 def _extract_distinct_process_applications(state: OrqflowState) -> list[int]:
