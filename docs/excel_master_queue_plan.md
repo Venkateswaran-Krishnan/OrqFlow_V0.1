@@ -42,7 +42,10 @@ Supported source adapters:
 - Resolve `QueueFileLocation` only for Excel:
   - Absolute paths are used directly.
   - Relative paths are resolved from `config_context["project_config_dir"]`.
-- For API, pass `process_config.settings.ApiConfig` to `read_api_dataframe(...)`.
+- For API, pass the full resolved `state["config"]` to `read_api_dataframe(...)`:
+  - Before: `return module.read_api_dataframe(settings.get("ApiConfig") or {})`
+  - After: `return module.read_api_dataframe(state.get("config", {}))`
+  - This replaced the legacy `process_config.settings.ApiConfig`-only payload so API loaders can read shared process, queue, and execution configuration from one consistent config object.
 - Use the already initialized DB adapter:
   - `db = state["queue_db"]`
   - Do not create a new DB connection inside master queue creator.

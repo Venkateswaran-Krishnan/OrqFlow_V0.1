@@ -377,8 +377,9 @@ def _load_api_dataframe(state: OrqflowState) -> Any:
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    settings = state.get("config", {}).get("process_config", {}).get("settings", {})
-    return module.read_api_dataframe(settings.get("ApiConfig") or {})
+    # Pass the full resolved config instead of legacy process_config.settings.ApiConfig
+    # so API loaders can use shared process, queue, and execution configuration.
+    return module.read_api_dataframe(state.get("config", {}))
 
 
 def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, Any]:

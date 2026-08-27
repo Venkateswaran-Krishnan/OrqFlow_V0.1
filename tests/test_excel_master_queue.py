@@ -12,6 +12,7 @@ from openpyxl import Workbook
 
 from framework.runtime.queue_db import SQLiteQueueDatabase, load_queue_queries
 from framework.runtime.queue_runtime import (
+    _load_api_dataframe,
     _is_duplicate_input_error,
     create_master_queue,
     get_next_transaction,
@@ -96,6 +97,27 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual("SYSTEM_EXCEPTION", state["runtime_config"]["last_status"])
         self.assertIn("API input loading is not configured yet", state["runtime_config"]["last_error"])
         self.assertEqual(0, self._count("tbl_input"))
+
+    def test_api_source_passes_full_state_config_to_adapter(self) -> None:
+        share_root = self.project_dir / "share"
+        common_dir = share_root / "common"
+        common_dir.mkdir(parents=True)
+        (common_dir / "api.py").write_text(
+            "def read_api_dataframe(config):\n"
+            "    if 'queue_config' not in config:\n"
+            "        raise AssertionError('missing queue_config')\n"
+            "    if 'process_config' not in config:\n"
+            "        raise AssertionError('missing process_config')\n"
+            "    if config['process_config']['settings'].get('ApiConfig') != {'token': 'abc'}:\n"
+            "        raise AssertionError('missing nested ApiConfig')\n"
+            "    return 'ok'\n",
+            encoding="utf-8",
+        )
+        state = self._state(queue_source="API")
+        state["config_context"]["share_root"] = str(share_root)
+        state["config"]["process_config"]["settings"]["ApiConfig"] = {"token": "abc"}
+
+        self.assertEqual("ok", _load_api_dataframe(state))
 
     def test_missing_mandatory_column_fails_before_insert(self) -> None:
         workbook_path = self._write_excel(
