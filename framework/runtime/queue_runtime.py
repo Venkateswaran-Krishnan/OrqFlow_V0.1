@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sqlite3
 import time
@@ -379,7 +380,14 @@ def _load_api_dataframe(state: OrqflowState) -> Any:
     spec.loader.exec_module(module)
     # Pass the full resolved config instead of legacy process_config.settings.ApiConfig
     # so API loaders can use shared process, queue, and execution configuration.
-    return module.read_api_dataframe(state.get("config", {}))
+    read_api_dataframe = module.read_api_dataframe
+    signature = inspect.signature(read_api_dataframe)
+    if len(signature.parameters) >= 2:
+        return read_api_dataframe(
+            state.get("config", {}),
+            state.get("config_context", {}),
+        )
+    return read_api_dataframe(state.get("config", {}))
 
 
 def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, Any]:
@@ -404,6 +412,8 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         for column in dataframe.columns
         if column in db_columns and column not in GENERATED_TBL_INPUT_COLUMNS
     ]
+    if "Case_Json" in db_columns and "Case_Json" not in insertable_columns:
+        insertable_columns.append("Case_Json")
     insertable_columns.append("Process")
     if "Input_Identifier" in db_columns:
         insertable_columns.append("Input_Identifier")
@@ -441,11 +451,19 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
             continue
 
         values = []
+        extra_case_json = _extra_case_json(row, dataframe.columns, db_columns)
         for column in insertable_columns:
             if column == "Process":
                 values.append(process_id)
             elif column == "Input_Identifier":
                 values.append(f"{process_id}_{row['Case_ID']}")
+            elif column == "Case_Json":
+                values.append(
+                    _merged_case_json_value(
+                        row["Case_Json"] if "Case_Json" in dataframe.columns else None,
+                        extra_case_json,
+                    )
+                )
             else:
                 values.append(_normalize_db_value(row[column]))
 
@@ -728,6 +746,39 @@ def _normalize_db_value(value: Any) -> Any:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
+
+
+def _extra_case_json(row: Any, columns: Any, db_columns: set[str]) -> dict[str, Any]:
+    return {
+        column: _normalize_db_value(row[column])
+        for column in columns
+        if column not in db_columns and column not in GENERATED_TBL_INPUT_COLUMNS
+    }
+
+
+def _merged_case_json_value(value: Any, extra_values: dict[str, Any]) -> str | None:
+    merged: dict[str, Any] = {}
+    normalized_value = _normalize_db_value(value)
+
+    if isinstance(normalized_value, dict):
+        merged.update(normalized_value)
+    elif isinstance(normalized_value, str) and normalized_value.strip():
+        try:
+            parsed = json.loads(normalized_value)
+        except json.JSONDecodeError:
+            merged["Case_Json"] = normalized_value
+        else:
+            if isinstance(parsed, dict):
+                merged.update(parsed)
+            else:
+                merged["Case_Json"] = parsed
+    elif normalized_value is not None:
+        merged["Case_Json"] = normalized_value
+
+    merged.update(extra_values)
+    if not merged:
+        return None
+    return json.dumps(merged, default=str)
 
 
 def _set_runtime_failure(state: OrqflowState, error: Exception) -> None:

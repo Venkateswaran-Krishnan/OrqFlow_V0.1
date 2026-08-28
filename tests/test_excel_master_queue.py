@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -119,6 +120,23 @@ class ExcelMasterQueueTests(unittest.TestCase):
 
         self.assertEqual("ok", _load_api_dataframe(state))
 
+    def test_api_source_passes_config_context_to_two_argument_adapter(self) -> None:
+        share_root = self.project_dir / "share"
+        common_dir = share_root / "common"
+        common_dir.mkdir(parents=True)
+        (common_dir / "api.py").write_text(
+            "def read_api_dataframe(config, config_context):\n"
+            "    if config_context.get('project_config_dir') != 'expected-project-dir':\n"
+            "        raise AssertionError('missing config_context')\n"
+            "    return 'ok'\n",
+            encoding="utf-8",
+        )
+        state = self._state(queue_source="API")
+        state["config_context"]["share_root"] = str(share_root)
+        state["config_context"]["project_config_dir"] = "expected-project-dir"
+
+        self.assertEqual("ok", _load_api_dataframe(state))
+
     def test_missing_mandatory_column_fails_before_insert(self) -> None:
         workbook_path = self._write_excel(
             ["Processor", "Process", "Chargeback_Date", "Case_Json"],
@@ -188,6 +206,81 @@ class ExcelMasterQueueTests(unittest.TestCase):
                 "failed_inputs": [],
             },
             state["runtime_config"]["queue_creation_summary"],
+        )
+
+    def test_unmatched_input_columns_are_stored_in_case_json(self) -> None:
+        workbook_path = self._write_excel(
+            [
+                "Processor",
+                "Chargeback_Date",
+                "Case_ID",
+                "Case_Number",
+                "UDF 4",
+                "Business Unit Name",
+            ],
+            [
+                [
+                    10,
+                    "2026-05-25",
+                    "CASE-1",
+                    "CB-1",
+                    "Direct Fulfillment",
+                    "Wireless",
+                ],
+            ],
+        )
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+
+        row = self.db.connection.execute(
+            """
+            SELECT Case_ID, Case_Number, Case_Json
+            FROM tbl_input
+            """
+        ).fetchone()
+        self.assertEqual("CASE-1", row["Case_ID"])
+        self.assertEqual("CB-1", row["Case_Number"])
+        self.assertEqual(
+            {
+                "UDF 4": "Direct Fulfillment",
+                "Business Unit Name": "Wireless",
+            },
+            json.loads(row["Case_Json"]),
+        )
+
+    def test_unmatched_input_columns_merge_with_existing_case_json(self) -> None:
+        workbook_path = self._write_excel(
+            [
+                "Processor",
+                "Chargeback_Date",
+                "Case_ID",
+                "Case_Json",
+                "UDF 4",
+            ],
+            [
+                [
+                    10,
+                    "2026-05-25",
+                    "CASE-1",
+                    '{"existing": "keep"}',
+                    "Real Time Biller",
+                ],
+            ],
+        )
+        state = self._state(queue_file=workbook_path.name)
+
+        create_master_queue(state)
+
+        row = self.db.connection.execute(
+            "SELECT Case_Json FROM tbl_input"
+        ).fetchone()
+        self.assertEqual(
+            {
+                "existing": "keep",
+                "UDF 4": "Real Time Biller",
+            },
+            json.loads(row["Case_Json"]),
         )
 
     def test_source_process_column_is_ignored(self) -> None:
