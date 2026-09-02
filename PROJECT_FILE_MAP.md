@@ -62,13 +62,13 @@ Application login behavior. Skips login after it has already completed for the c
 Coordinates startup, application batch completion, application switching, retry recovery, optional project-specific reset hooks, and scheduled master-queue refresh preparation.
 
 `framework/runtime/queue_runtime.py`  
-Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
+Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Transaction fetch considers configured in-progress and eligible statuses, prioritizing in-progress work for the active application. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
 
 `framework/runtime/process_runtime.py`
 Loads the ordered `PROCESS_TRANSACTION` scheduler definitions, validates KeySteps `BatchCount`, tracks the active application session, selects and invokes the configured `package.module:function`, validates its result, and maps failures to framework outcomes.
 
 `framework/runtime/transition_runtime.py`  
-Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end. Transition-input diagnostics use an explicit safe-field list rather than logging complete runtime state.
+Post-transaction decisions: success, business exception, system exception, retry, app switch, next transaction, and end. Success, skipped, and final failed transitions pass the human-readable message/reason plus runtime `cto_details` JSON into queue finalization. Transition-input diagnostics use an explicit safe-field list rather than logging complete runtime state.
 
 `framework/runtime/cleanup_runtime.py`  
 Stops the browser driver, closes the queue database connection, sets the terminal runtime action to `END`, and logs cleanup progress.

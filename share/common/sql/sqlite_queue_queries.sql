@@ -71,15 +71,20 @@ SELECT
     i.BUnit AS input_bunit
 FROM tbl_queue q
 JOIN tbl_input i ON i.ID = q.Case_Details
-WHERE q.Processing_Status = ?
+WHERE q.Processing_Status IN (?, ?)
   AND q.Application_Details = ?
-ORDER BY q.ID
+ORDER BY
+    CASE
+        WHEN q.Processing_Status = ? THEN 0
+        ELSE 1
+    END,
+    q.ID
 LIMIT 1;
 
 -- name: fetch_any_eligible_transaction
 SELECT ID
 FROM tbl_queue
-WHERE Processing_Status = ?
+WHERE Processing_Status IN (?, ?)
 ORDER BY ID
 LIMIT 1;
 
@@ -98,6 +103,10 @@ SET Processing_Status = ?,
         WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN ?
         ELSE Bot_Comment || char(10) || ?
     END,
+    CTO_Details = CASE
+        WHEN ? IS NULL OR ? = '' THEN CTO_Details
+        ELSE ?
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = ?;
 
@@ -109,6 +118,10 @@ SET Processing_Status = ?,
         WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN ?
         ELSE Bot_Comment || char(10) || ?
     END,
+    CTO_Details = CASE
+        WHEN ? IS NULL OR ? = '' THEN CTO_Details
+        ELSE ?
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = ?;
 
@@ -119,6 +132,10 @@ SET Processing_Status = ?,
         WHEN ? IS NULL OR ? = '' THEN Bot_Comment
         WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN ?
         ELSE Bot_Comment || char(10) || ?
+    END,
+    CTO_Details = CASE
+        WHEN ? IS NULL OR ? = '' THEN CTO_Details
+        ELSE ?
     END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = ?;

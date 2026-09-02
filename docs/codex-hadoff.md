@@ -1049,6 +1049,7 @@ Open schema caveat:
 - Process runtime may update `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
 - `transition_hub` should write configured final success/fail/skip statuses and set `ProcessingEND_timestamp`.
 - Status text should be configurable so production names can be matched exactly; `In Processing` is the confirmed in-progress value.
+- Queue fetch now considers both `queue_config.in_progress_status` and `queue_config.eligible_status`, with `In Processing` prioritized first for the active application. The global eligibility check uses the same two configured statuses. Debug logging records the status priority and selected IDs without logging complete transaction payloads.
 
 ## 2026-08-03 Distinct-Application Queue Creation
 
@@ -1251,3 +1252,31 @@ Verification:
 - Full source verification: `76 tests passed`.
 - Built artifact: `dist/framework-0.1.6-py3-none-any.whl`.
 - Artifact SHA-256: `FABCA9C14CA31154494F330D60F6616143174BC0845EBD2A6AEE5B20AC1CC3BA`.
+
+## 2026-08-29 Final Queue Details Payload
+
+Decision:
+
+- Final queue updates now keep `Bot_Comment` and `CTO_Details` separate.
+- `Bot_Comment` receives the human-readable process message or error reason.
+- `CTO_Details` receives a JSON string from `runtime_config.cto_details`.
+- Success, skipped business exceptions, and retry-exhausted failures all pass `cto_details` into final queue update.
+
+Changes made:
+
+- `DatabaseQueue.mark_success()` now accepts optional `reason` and `cto_details`.
+- `DatabaseQueue.mark_skipped()` and `mark_failed()` now accept optional `cto_details`.
+- The shared finalization path writes `CTO_Details` when a nonblank details string is provided.
+- Transition runtime passes `runtime_config.last_message` on success and `runtime_config.last_error` on skipped/failed, plus `runtime_config.cto_details` on all final outcomes.
+- Process runtime stores returned result data field `CTO_Details` or `cto_details` into `runtime_config.cto_details`, JSON-encoding non-string values.
+- SQLite and MySQL queue finalization SQL now update `CTO_Details` independently from `Bot_Comment`.
+- Package version bumped to `0.1.9`.
+- Package version bumped to `0.1.10` after configurable in-progress queue prioritization, logging, and documentation updates.
+
+Verification:
+
+- Compile check passed with `python -m compileall framework tests`.
+- Focused runtime coverage passed with `64 tests`.
+- Full source suite passed with `81 tests`.
+- Built artifact: `dist/framework-0.1.9-py3-none-any.whl`.
+- Artifact SHA-256: `41CCD5FED4DF16DF24D132334FC7AC28D201BD60819536687015C326BD97EC7C`.

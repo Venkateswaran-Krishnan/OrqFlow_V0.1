@@ -21,7 +21,7 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
     logger.debug(
         "Transition input: outcome=%s, queue_id=%s, retry_count=%s, "
         "batch_count=%s, wait_count=%s, requested_action=%s",
-        outcome,
+        outcome.value,
         txn.get("queue_id") if isinstance(txn, dict) else None,
         runtime.get("retry_count"),
         runtime.get("batch_count"),
@@ -30,7 +30,11 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
     )
 
     if outcome == Outcome.SUCCESS:
-        state["queue"].mark_success(txn)
+        state["queue"].mark_success(
+            txn,
+            runtime.get("last_message"),
+            runtime.get("cto_details"),
+        )
         record_finalized_transaction(state)
         runtime["retry_count"] = 0
         runtime["txn"] = None
@@ -39,7 +43,11 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
         return state
 
     if outcome == Outcome.BUSINESS_EXCEPTION:
-        state["queue"].mark_skipped(txn, runtime.get("last_error"))
+        state["queue"].mark_skipped(
+            txn,
+            runtime.get("last_error"),
+            runtime.get("cto_details"),
+        )
         record_finalized_transaction(state)
         runtime["retry_count"] = 0
         runtime["txn"] = None
@@ -60,7 +68,11 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
             logger.info("System-exception retry selected")
             return state
 
-        state["queue"].mark_failed(txn, runtime.get("last_error"))
+        state["queue"].mark_failed(
+            txn,
+            runtime.get("last_error"),
+            runtime.get("cto_details"),
+        )
         record_finalized_transaction(state)
         runtime["retry_count"] = 0
         runtime["txn"] = None

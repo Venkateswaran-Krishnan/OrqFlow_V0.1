@@ -20,13 +20,28 @@ class SimulatedQueue:
     def has_eligible_transactions(self) -> bool:
         return any(self.pending.values())
 
-    def mark_success(self, txn: dict) -> None:
+    def mark_success(
+        self,
+        txn: dict,
+        reason: str | None = None,
+        cto_details: str | None = None,
+    ) -> None:
         self.completed.append(txn["case_id"])
 
-    def mark_skipped(self, txn: dict, reason: str | None) -> None:
+    def mark_skipped(
+        self,
+        txn: dict,
+        reason: str | None,
+        cto_details: str | None = None,
+    ) -> None:
         raise AssertionError("No simulated transaction should be skipped")
 
-    def mark_failed(self, txn: dict, reason: str | None) -> None:
+    def mark_failed(
+        self,
+        txn: dict,
+        reason: str | None,
+        cto_details: str | None = None,
+    ) -> None:
         raise AssertionError("No simulated transaction should fail")
 
 

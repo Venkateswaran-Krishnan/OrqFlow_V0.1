@@ -71,15 +71,20 @@ SELECT
     i.BUnit AS input_bunit
 FROM tbl_queue q
 JOIN tbl_input i ON i.ID = q.Case_Details
-WHERE q.Processing_Status = %s
+WHERE q.Processing_Status IN (%s, %s)
   AND q.Application_Details = %s
-ORDER BY q.ID
+ORDER BY
+    CASE
+        WHEN q.Processing_Status = %s THEN 0
+        ELSE 1
+    END,
+    q.ID
 LIMIT 1;
 
 -- name: fetch_any_eligible_transaction
 SELECT ID
 FROM tbl_queue
-WHERE Processing_Status = %s
+WHERE Processing_Status IN (%s, %s)
 ORDER BY ID
 LIMIT 1;
 
@@ -98,6 +103,10 @@ SET Processing_Status = %s,
         WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN %s
         ELSE CONCAT(Bot_Comment, CHAR(10), %s)
     END,
+    CTO_Details = CASE
+        WHEN %s IS NULL OR %s = '' THEN CTO_Details
+        ELSE %s
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = %s;
 
@@ -109,6 +118,10 @@ SET Processing_Status = %s,
         WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN %s
         ELSE CONCAT(Bot_Comment, CHAR(10), %s)
     END,
+    CTO_Details = CASE
+        WHEN %s IS NULL OR %s = '' THEN CTO_Details
+        ELSE %s
+    END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = %s;
 
@@ -119,6 +132,10 @@ SET Processing_Status = %s,
         WHEN %s IS NULL OR %s = '' THEN Bot_Comment
         WHEN Bot_Comment IS NULL OR Bot_Comment = '' THEN %s
         ELSE CONCAT(Bot_Comment, CHAR(10), %s)
+    END,
+    CTO_Details = CASE
+        WHEN %s IS NULL OR %s = '' THEN CTO_Details
+        ELSE %s
     END,
     ProcessingEND_timestamp = CURRENT_TIMESTAMP
 WHERE ID = %s;

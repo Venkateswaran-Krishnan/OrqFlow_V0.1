@@ -34,7 +34,24 @@ class ProcessRuntimeTests(unittest.TestCase):
         self.assertEqual(
             {"output": "result.json"}, state["runtime_config"]["last_result"]
         )
+        self.assertIsNone(state["runtime_config"]["cto_details"])
         self.assertFalse(state["runtime_config"]["first_run"])
+
+    def test_cto_details_result_is_stored_for_transition(self) -> None:
+        module = types.ModuleType("cto_process_module")
+        module.run_process = lambda state: success(
+            "Processed",
+            CTO_Details={"overall_status": "Success"},
+        )
+        state = self._state("cto_process_module:run_process")
+
+        with patch.dict(sys.modules, {"cto_process_module": module}):
+            execute_process_transaction(state)
+
+        self.assertEqual(
+            '{"overall_status": "Success"}',
+            state["runtime_config"]["cto_details"],
+        )
 
     def test_module_exception_becomes_system_exception(self) -> None:
         module = types.ModuleType("failing_process_module")
@@ -55,6 +72,7 @@ class ProcessRuntimeTests(unittest.TestCase):
             "OCR service unavailable", state["runtime_config"]["last_error"]
         )
         self.assertIsNone(state["runtime_config"]["next_action"])
+        self.assertIsNone(state["runtime_config"]["cto_details"])
 
     def test_returned_business_exception_logs_its_message(self) -> None:
         module = types.ModuleType("business_process_module")

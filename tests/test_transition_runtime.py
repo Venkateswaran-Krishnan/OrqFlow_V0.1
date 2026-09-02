@@ -16,14 +16,29 @@ class StubQueue:
     def has_eligible_transactions(self) -> bool:
         return self.eligible
 
-    def mark_success(self, txn: dict) -> None:
-        self.successful.append(txn)
+    def mark_success(
+        self,
+        txn: dict,
+        reason: str | None = None,
+        cto_details: str | None = None,
+    ) -> None:
+        self.successful.append((txn, reason, cto_details))
 
-    def mark_skipped(self, txn: dict, reason: str | None) -> None:
-        self.skipped.append((txn, reason))
+    def mark_skipped(
+        self,
+        txn: dict,
+        reason: str | None,
+        cto_details: str | None = None,
+    ) -> None:
+        self.skipped.append((txn, reason, cto_details))
 
-    def mark_failed(self, txn: dict, reason: str | None) -> None:
-        self.failed.append((txn, reason))
+    def mark_failed(
+        self,
+        txn: dict,
+        reason: str | None,
+        cto_details: str | None = None,
+    ) -> None:
+        self.failed.append((txn, reason, cto_details))
 
 
 class TransitionRuntimeTests(unittest.TestCase):
@@ -52,7 +67,10 @@ class TransitionRuntimeTests(unittest.TestCase):
 
         resolve_transition(state)
 
-        self.assertEqual([transaction], state["queue"].successful)
+        self.assertEqual(
+            [(transaction, "done", '{"overall_status": "Success"}')],
+            state["queue"].successful,
+        )
         self.assertEqual(1, state["runtime_config"]["session_batch_count"])
         self.assertEqual("APP_SWITCH", state["runtime_config"]["next_action"])
         self.assertIsNone(state["runtime_config"]["txn"])
@@ -82,10 +100,14 @@ class TransitionRuntimeTests(unittest.TestCase):
     def test_exhausted_retry_marks_failed_and_counts_final_transaction(self) -> None:
         state = self._state(Outcome.SYSTEM_EXCEPTION, batch_limit=2, session_count=1)
         state["runtime_config"]["retry_count"] = 1
+        transaction = state["runtime_config"]["txn"]
 
         resolve_transition(state)
 
-        self.assertEqual(1, len(state["queue"].failed))
+        self.assertEqual(
+            [(transaction, "failure", '{"overall_status": "Failed"}')],
+            state["queue"].failed,
+        )
         self.assertEqual(2, state["runtime_config"]["session_batch_count"])
         self.assertEqual("BATCH_COMPLETE", state["runtime_config"]["next_action"])
 
@@ -118,6 +140,12 @@ class TransitionRuntimeTests(unittest.TestCase):
             "runtime_config": {
                 "last_status": outcome,
                 "last_error": "failure" if outcome != Outcome.SUCCESS else None,
+                "last_message": "done" if outcome == Outcome.SUCCESS else None,
+                "cto_details": (
+                    '{"overall_status": "Success"}'
+                    if outcome == Outcome.SUCCESS
+                    else '{"overall_status": "Failed"}'
+                ),
                 "txn": {"queue_id": 7, "queue_application_details": 13},
                 "retry_count": 0,
                 "batch_count": 1,

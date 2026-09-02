@@ -25,18 +25,47 @@ class DatabaseQueue:
 
     def fetch_next(self) -> dict | None:
         queue_config = _queue_config(self.state)
+        logger = get_logger("runtime.queue")
         application_id = self.state["runtime_config"].get("active_application_id")
         if application_id is None:
             raise ValueError("runtime_config.active_application_id is required")
+        logger.debug(
+            "Fetching queue transaction: application_id=%s, priority_status=%s, "
+            "fallback_status=%s",
+            application_id,
+            queue_config["in_progress_status"],
+            queue_config["eligible_status"],
+        )
         cursor = self.db.connection.execute(
             self.db.queries["fetch_next_transaction"],
-            [queue_config["eligible_status"], application_id],
+            [
+                queue_config["in_progress_status"],
+                queue_config["eligible_status"],
+                application_id,
+                queue_config["in_progress_status"],
+            ],
         )
         row = cursor.fetchone()
         if row is None:
+            logger.debug(
+                "No queue transaction matched fetch statuses: application_id=%s, "
+                "priority_status=%s, fallback_status=%s",
+                application_id,
+                queue_config["in_progress_status"],
+                queue_config["eligible_status"],
+            )
             return None
 
         txn = _row_to_dict(row)
+        original_status = txn.get("queue_processing_status")
+        logger.debug(
+            "Queue transaction selected: queue_id=%s, input_id=%s, application_id=%s, "
+            "selected_status=%s",
+            txn.get("queue_id"),
+            txn.get("input_id"),
+            txn.get("queue_application_details"),
+            original_status,
+        )
         self.db.connection.execute(
             self.db.queries["mark_transaction_in_progress"],
             [
@@ -48,41 +77,115 @@ class DatabaseQueue:
         self.db.connection.commit()
         txn["queue_processing_status"] = queue_config["in_progress_status"]
         txn["case_json"] = _parse_case_json(txn.get("input_case_json"))
+        logger.debug(
+            "Queue transaction marked in progress: queue_id=%s, previous_status=%s, "
+            "new_status=%s",
+            txn.get("queue_id"),
+            original_status,
+            queue_config["in_progress_status"],
+        )
         return txn
 
     def has_eligible_transactions(self) -> bool:
+        queue_config = _queue_config(self.state)
+        logger = get_logger("runtime.queue")
         cursor = self.db.connection.execute(
             self.db.queries["fetch_any_eligible_transaction"],
-            [_queue_config(self.state)["eligible_status"]],
+            [
+                queue_config["in_progress_status"],
+                queue_config["eligible_status"],
+            ],
         )
-        return cursor.fetchone() is not None
+        has_transaction = cursor.fetchone() is not None
+        logger.debug(
+            "Global queue eligibility checked: priority_status=%s, fallback_status=%s, "
+            "has_transaction=%s",
+            queue_config["in_progress_status"],
+            queue_config["eligible_status"],
+            has_transaction,
+        )
+        return has_transaction
 
-    def mark_success(self, txn: dict) -> None:
-        self._mark_final(txn, "mark_transaction_success", _queue_config(self.state)["success_status"], None)
+    def mark_success(
+        self,
+        txn: dict,
+        reason: str | None = None,
+        cto_details: str | None = None,
+    ) -> None:
+        self._mark_final(
+            txn,
+            "mark_transaction_success",
+            _queue_config(self.state)["success_status"],
+            reason,
+            cto_details,
+        )
 
-    def mark_skipped(self, txn: dict, reason: str | None) -> None:
-        self._mark_final(txn, "mark_transaction_skipped", _queue_config(self.state)["skipped_status"], reason)
+    def mark_skipped(
+        self,
+        txn: dict,
+        reason: str | None,
+        cto_details: str | None = None,
+    ) -> None:
+        self._mark_final(
+            txn,
+            "mark_transaction_skipped",
+            _queue_config(self.state)["skipped_status"],
+            reason,
+            cto_details,
+        )
 
-    def mark_failed(self, txn: dict, reason: str | None) -> None:
-        self._mark_final(txn, "mark_transaction_failed", _queue_config(self.state)["failed_status"], reason)
+    def mark_failed(
+        self,
+        txn: dict,
+        reason: str | None,
+        cto_details: str | None = None,
+    ) -> None:
+        self._mark_final(
+            txn,
+            "mark_transaction_failed",
+            _queue_config(self.state)["failed_status"],
+            reason,
+            cto_details,
+        )
 
-    def _mark_final(self, txn: dict, query_name: str, status: str, reason: str | None) -> None:
+    def _mark_final(
+        self,
+        txn: dict,
+        query_name: str,
+        status: str,
+        reason: str | None,
+        cto_details: str | None,
+    ) -> None:
         if txn is None:
             return
         logger = get_logger("runtime.queue")
         self.db.connection.execute(
             self.db.queries[query_name],
-            [status, reason, reason, reason, reason, txn["queue_id"]],
+            [
+                status,
+                reason,
+                reason,
+                reason,
+                reason,
+                cto_details,
+                cto_details,
+                cto_details,
+                txn["queue_id"],
+            ],
         )
         self.db.connection.commit()
         txn["queue_processing_status"] = status
         txn["queue_bot_comment"] = reason
+        if cto_details is not None and cto_details != "":
+            txn["queue_cto_details"] = cto_details
         logger.info("Queue transaction status updated")
         logger.debug(
-            "Queue transaction status details: queue_id=%s, status=%s, reason=%s",
+            "Queue transaction status details: queue_id=%s, status=%s, reason=%s, "
+            "has_cto_details=%s",
             txn["queue_id"],
             status,
             reason,
+            cto_details is not None and cto_details != "",
         )
 
 

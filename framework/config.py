@@ -25,6 +25,9 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "txn": None,
     "last_status": None,
     "last_error": None,
+    "last_message": None,
+    "last_result": {},
+    "cto_details": None,
     "next_action": None,
 }
 

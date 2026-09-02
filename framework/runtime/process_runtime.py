@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
@@ -150,6 +151,7 @@ def execute_process_transaction(state: OrqflowState) -> OrqflowState:
         runtime["last_error"] = None if outcome == Outcome.SUCCESS else message
         runtime["last_message"] = message
         runtime["last_result"] = data
+        runtime["cto_details"] = _cto_details_from_result(data)
         runtime["next_action"] = next_action
 
         if outcome == Outcome.BUSINESS_EXCEPTION:
@@ -178,6 +180,7 @@ def execute_process_transaction(state: OrqflowState) -> OrqflowState:
         runtime["last_error"] = str(error)
         runtime["last_message"] = None
         runtime["last_result"] = {}
+        runtime["cto_details"] = None
         runtime["next_action"] = None
 
     return state
@@ -337,6 +340,18 @@ def _validate_result(
     next_action_value = result.get("next_action")
     next_action = None if next_action_value is None else str(next_action_value)
     return outcome, message, dict(data_value), next_action
+
+
+def _cto_details_from_result(data: Mapping[str, Any]) -> str | None:
+    value = data.get("cto_details")
+    if value is None:
+        value = data.get("CTO_Details")
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return json.dumps(value, default=str)
 
 
 def _application_matches(value: Any, expected: Any) -> bool:

@@ -22,7 +22,12 @@ class StubQueue:
             "customer_data": SENSITIVE_VALUE,
         }
 
-    def mark_success(self, transaction: dict) -> None:
+    def mark_success(
+        self,
+        transaction: dict,
+        reason: str | None = None,
+        cto_details: str | None = None,
+    ) -> None:
         self.successful_transactions.append(transaction)
 
 

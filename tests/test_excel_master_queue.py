@@ -645,6 +645,19 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual("Queue Created", statuses[0]["Processing_Status"])
         self.assertEqual("In Processing", statuses[1]["Processing_Status"])
 
+    def test_get_next_transaction_picks_in_progress_before_queue_created(self) -> None:
+        self._insert_input_and_queue("Queue Created", application_id=10)
+        expected_input_id = self._insert_input_and_queue(
+            "In Processing", application_id=10
+        )
+        state = self._state()
+
+        get_next_transaction(state)
+
+        txn = state["runtime_config"]["txn"]
+        self.assertEqual(expected_input_id, txn["input_id"])
+        self.assertEqual("In Processing", txn["queue_processing_status"])
+
     def test_global_eligible_check_is_independent_of_active_application(self) -> None:
         self._insert_input_and_queue("Queue Created", application_id=10)
         state = self._state()
@@ -691,33 +704,47 @@ class ExcelMasterQueueTests(unittest.TestCase):
         state = self._state()
         get_next_transaction(state)
 
-        state["queue"].mark_success(state["runtime_config"]["txn"])
+        state["queue"].mark_success(
+            state["runtime_config"]["txn"],
+            "success reason",
+            '{"overall_status": "Success"}',
+        )
 
         queue_row = self.db.connection.execute(
-            "SELECT Processing_Status, Bot_Comment, ProcessingEND_timestamp FROM tbl_queue"
+            "SELECT Processing_Status, Bot_Comment, CTO_Details, ProcessingEND_timestamp FROM tbl_queue"
         ).fetchone()
         self.assertEqual("Success", queue_row["Processing_Status"])
-        self.assertIsNone(queue_row["Bot_Comment"])
+        self.assertEqual("success reason", queue_row["Bot_Comment"])
+        self.assertEqual('{"overall_status": "Success"}', queue_row["CTO_Details"])
         self.assertIsNotNone(queue_row["ProcessingEND_timestamp"])
 
-    def test_success_with_no_reason_preserves_existing_bot_comment(self) -> None:
-        self._insert_input_and_queue("Queue Created", bot_comment="existing note")
+    def test_success_with_no_details_preserves_existing_final_fields(self) -> None:
+        self._insert_input_and_queue(
+            "Queue Created",
+            bot_comment="existing note",
+            cto_details='{"existing": true}',
+        )
         state = self._state()
         get_next_transaction(state)
 
         state["queue"].mark_success(state["runtime_config"]["txn"])
 
         queue_row = self.db.connection.execute(
-            "SELECT Processing_Status, Bot_Comment FROM tbl_queue"
+            "SELECT Processing_Status, Bot_Comment, CTO_Details FROM tbl_queue"
         ).fetchone()
         self.assertEqual("Success", queue_row["Processing_Status"])
         self.assertEqual("existing note", queue_row["Bot_Comment"])
+        self.assertEqual('{"existing": true}', queue_row["CTO_Details"])
 
     def test_database_queue_writes_failed_and_skipped_statuses(self) -> None:
         input_id = self._insert_input_and_queue("Queue Created", bot_comment="first note")
         state = self._state()
         get_next_transaction(state)
-        state["queue"].mark_failed(state["runtime_config"]["txn"], "failed reason")
+        state["queue"].mark_failed(
+            state["runtime_config"]["txn"],
+            "failed reason",
+            '{"overall_status": "Failed"}',
+        )
 
         self.db.connection.execute(
             """
@@ -729,15 +756,21 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.db.connection.commit()
         state["runtime_config"]["queue_initialized"] = False
         get_next_transaction(state)
-        state["queue"].mark_skipped(state["runtime_config"]["txn"], "skip reason")
+        state["queue"].mark_skipped(
+            state["runtime_config"]["txn"],
+            "skip reason",
+            '{"overall_status": "Skipped"}',
+        )
 
         rows = self.db.connection.execute(
-            "SELECT Processing_Status, Bot_Comment FROM tbl_queue ORDER BY ID"
+            "SELECT Processing_Status, Bot_Comment, CTO_Details FROM tbl_queue ORDER BY ID"
         ).fetchall()
         self.assertEqual("Failed", rows[0]["Processing_Status"])
         self.assertEqual("first note\nfailed reason", rows[0]["Bot_Comment"])
+        self.assertEqual('{"overall_status": "Failed"}', rows[0]["CTO_Details"])
         self.assertEqual("Skipped", rows[1]["Processing_Status"])
         self.assertEqual("skip reason", rows[1]["Bot_Comment"])
+        self.assertEqual('{"overall_status": "Skipped"}', rows[1]["CTO_Details"])
 
     def _create_schema(self) -> None:
         connection = sqlite3.connect(self.db_path)
@@ -880,6 +913,7 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self,
         status: str,
         bot_comment: str | None = None,
+        cto_details: str | None = None,
         application_id: int = 10,
     ) -> int:
         cursor = self.db.connection.execute(
@@ -906,10 +940,16 @@ class ExcelMasterQueueTests(unittest.TestCase):
         input_id = int(cursor.lastrowid)
         self.db.connection.execute(
             """
-            INSERT INTO tbl_queue (Case_Details, Application_Details, Processing_Status, Bot_Comment)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tbl_queue (
+                Case_Details,
+                Application_Details,
+                Processing_Status,
+                Bot_Comment,
+                CTO_Details
+            )
+            VALUES (?, ?, ?, ?, ?)
             """,
-            [input_id, application_id, status, bot_comment],
+            [input_id, application_id, status, bot_comment, cto_details],
         )
         self.db.connection.commit()
         return input_id

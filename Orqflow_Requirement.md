@@ -451,6 +451,8 @@ The intended transaction lifecycle is configurable. The confirmed in-progress va
 <eligible status> -> In Processing -> <success / skipped / failed status>
 ```
 
+Runtime transaction fetch treats both `queue_config.in_progress_status` and `queue_config.eligible_status` as fetchable statuses. Rows already marked `In Processing` are prioritized before newly created queue rows so interrupted or resumed work is picked first for the active application.
+
 ### 9.3 Schema Overview
 
 #### Institution and Process
@@ -571,9 +573,9 @@ The complete schema for these tables must be captured before implementation reli
 - Each transaction shall be locked before processing.
 - Duplicate processing shall be prevented.
 - Failed transactions shall be recorded with a reason.
-- Queue selection shall prioritize records eligible by `Processing_Status`.
+- Queue selection shall consider both `queue_config.in_progress_status` and `queue_config.eligible_status`, prioritizing `In Processing` rows before `Queue Created` rows.
 - Runtime queue selection shall filter eligible records by `runtime_config.active_application_id`.
-- The queue adapter shall also provide a global eligible-record check used to decide whether the scheduler must switch applications or finish.
+- The queue adapter shall also provide a global eligible-record check used to decide whether the scheduler must switch applications or finish; this check shall consider both in-progress and eligible queue statuses.
 - Queue records shall retain a durable link to `tbl_input.ID`.
 - Master queue creation shall accept supplied items as a DataFrame, whether the upstream source is Excel or an API call.
 - Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then create one linked `tbl_queue` row for each distinct application in the sequenced `PROCESS_TRANSACTION` KeySteps.
@@ -582,8 +584,9 @@ The complete schema for these tables must be captured before implementation reli
 - Non-duplicate database insert failures shall remain failed rows and shall be logged at `ERROR` with exception details.
 - Runtime transaction context shall include queue fields, input fields, and parsed `tbl_input.Case_Json` for process use.
 - `get_transaction` shall mark the selected queue item as `In Processing` and set `ProcessingSTART_timestamp`.
-- `process_transaction` may update runtime queue columns such as `CTO_Details`, `Evidence_Status`, `Dependency`, `Bot_Comment`, and `Output_tbl_Status`.
-- `transition_hub` shall update final configured status and `ProcessingEND_timestamp`.
+- Queue fetch logging shall record the active application ID, configured priority/fallback statuses, selected queue/input IDs, and selected status without logging full transaction payloads.
+- `process_transaction` may return `CTO_Details` or `cto_details` in result data. The framework stores that value in runtime as a JSON string and writes it to `tbl_queue.CTO_Details` when the transaction reaches any final condition: success, skipped business exception, or retry-exhausted failure. `Bot_Comment` remains a separate human-readable message/comment field.
+- `transition_hub` shall update final configured status, `ProcessingEND_timestamp`, optional `Bot_Comment`, and optional `CTO_Details`.
 - The framework shall not directly query these tables from LangGraph nodes or process modules; all DB interaction shall go through the queue/runtime adapter boundary.
 - Locking strategy, transaction isolation, final status vocabulary, and exact update SQL remain implementation details to confirm from production operating rules.
 
