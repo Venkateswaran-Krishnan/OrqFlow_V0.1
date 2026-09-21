@@ -20,6 +20,7 @@ from framework.nodes import (
     route_after_framework_init,
     route_after_execution_init,
     route_after_get,
+    route_after_login_application,
     route_after_master_queue_creator,
     route_after_transition,
     transition_hub,
@@ -77,7 +78,14 @@ def build_graph():
             "transition_hub": "transition_hub",
         },
     )
-    graph.add_edge("login_application", "process_transaction")
+    graph.add_conditional_edges(
+        "login_application",
+        route_after_login_application,
+        {
+            "process_transaction": "process_transaction",
+            "transition_hub": "transition_hub",
+        },
+    )
     graph.add_edge("process_transaction", "transition_hub")
     graph.add_conditional_edges(
         "transition_hub",

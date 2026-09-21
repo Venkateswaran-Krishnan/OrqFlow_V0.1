@@ -1280,3 +1280,36 @@ Verification:
 - Full source suite passed with `81 tests`.
 - Built artifact: `dist/framework-0.1.9-py3-none-any.whl`.
 - Artifact SHA-256: `41CCD5FED4DF16DF24D132334FC7AC28D201BD60819536687015C326BD97EC7C`.
+
+## 2026-09-21 KeySteps Lifecycle and Login Hooks
+
+Framework initialization:
+
+- `FRAMEWORK_INIT` now selects the optional matching row from the loaded `KeySteps.xlsx` DataFrame.
+- At most one framework-init row is accepted. A configured `Module` uses `package.module:function` and receives the complete shared state after scheduler and queue database initialization.
+- A missing row or blank module skips the project hook; module loading and execution failures become `SYSTEM_EXCEPTION` and route to `END`.
+
+Application login:
+
+- `LOGIN_APPLICATION` now selects rows by case-insensitive `State` and the active transaction's `queue_application_details` value.
+- Matching rows are ordered by numeric `Sequence`, with workbook order used as the tie-breaker, and the first row's `Module` is invoked with the complete shared state.
+- A missing matching row retains the existing placeholder login for backward compatibility. A matching row with a blank or invalid module is a configuration failure.
+- Successful login sets `runtime_config.application_logged_in = true`; an existing session continues to skip repeated login.
+- Login failures become `SYSTEM_EXCEPTION` and route to `TRANSITION_HUB`, preserving the configured transaction retry behavior instead of continuing into processing.
+
+Logging:
+
+- Framework and login hook skip/start/completion events are logged at `INFO`.
+- Selected application and module details are logged at `DEBUG`.
+- Loading or execution failures are logged at `ERROR` with a traceback; transaction payloads are not logged.
+
+Documentation and release:
+
+- Updated the workflow requirements, graph flowchart, project file map, and this handoff log.
+- Package version bumped from `0.1.10` to `0.1.11`.
+
+Verification:
+
+- Compile and diff checks passed.
+- Focused lifecycle, login, routing, graph, and scheduler coverage passed with `24 tests`.
+- Full source suite passed with `92 tests and 17 subtests`.

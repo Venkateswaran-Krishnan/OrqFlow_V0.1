@@ -614,6 +614,8 @@ The workflow shall include the following logical nodes:
 - Initialize logging and shared services.
 - Delegate framework startup behavior to the framework lifecycle service.
 - Initialize queue adapter placeholder.
+- Select the optional `FRAMEWORK_INIT` row from `KeySteps.xlsx` and invoke its `Module` using `package.module:function` after framework resources are ready.
+- Allow at most one `FRAMEWORK_INIT` row; a blank `Module` skips the project hook.
 - Create the shared state shell.
 - Route to `EXECUTION_INIT`.
 
@@ -655,7 +657,11 @@ The workflow shall include the following logical nodes:
 
 - Check whether application login has already completed for the current execution.
 - If login already completed, route directly to `PROCESS_TRANSACTION`.
-- If login has not completed, perform application login, set `runtime_config.application_logged_in` to `true`, and route to `PROCESS_TRANSACTION`.
+- If login has not completed, select the matching `LOGIN_APPLICATION` row from the loaded `KeySteps.xlsx` DataFrame using the active transaction's application ID.
+- Order matching rows by numeric `Sequence`, load the first row's `Module` using `package.module:function`, and invoke it with the complete shared state.
+- If no matching row exists, retain the framework's placeholder login behavior for backward compatibility.
+- After login completes, set `runtime_config.application_logged_in` to `true` and route to `PROCESS_TRANSACTION`.
+- Convert login-module loading or execution failures to `SYSTEM_EXCEPTION` and route through `TRANSITION_HUB` for the configured retry behavior.
 - Delegate login behavior to the application runtime service.
 
 #### PROCESS_TRANSACTION

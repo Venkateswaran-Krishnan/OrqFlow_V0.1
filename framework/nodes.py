@@ -79,6 +79,18 @@ def route_after_get(state: OrqflowState) -> Literal["login_application", "transi
     return "transition_hub"
 
 
+def route_after_login_application(
+    state: OrqflowState,
+) -> Literal["process_transaction", "transition_hub"]:
+    runtime = state["runtime_config"]
+    if (
+        runtime.get("last_status") == Outcome.SYSTEM_EXCEPTION
+        and not runtime.get("application_logged_in")
+    ):
+        return "transition_hub"
+    return "process_transaction"
+
+
 def route_after_execution_init(
     state: OrqflowState,
 ) -> Literal[

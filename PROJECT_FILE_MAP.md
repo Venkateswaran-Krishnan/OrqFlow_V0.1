@@ -53,10 +53,10 @@ Configures logging, rotating file logs, console output, and trace events.
 ## Runtime
 
 `framework/runtime/framework_lifecycle.py`  
-Framework startup behavior. Loads `KeySteps.xlsx` and initializes the configured queue database adapter. Initialization failures set `SYSTEM_EXCEPTION` and route safely to `END`.
+Framework startup behavior. Loads `KeySteps.xlsx`, initializes the configured queue database adapter, and invokes an optional `FRAMEWORK_INIT` KeySteps hook. Initialization failures set `SYSTEM_EXCEPTION` and route safely to `END`.
 
 `framework/runtime/application_runtime.py`  
-Application login behavior. Skips login after it has already completed for the current execution.
+Application login behavior. Selects application-specific `LOGIN_APPLICATION` hooks from loaded KeySteps and skips login after it has already completed for the current execution.
 
 `framework/runtime/execution_init_runtime.py`
 Coordinates startup, application batch completion, application switching, retry recovery, optional project-specific reset hooks, and scheduled master-queue refresh preparation.

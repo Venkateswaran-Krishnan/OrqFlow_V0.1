@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from framework.nodes import route_after_execution_init
+from framework.nodes import route_after_execution_init, route_after_login_application
 from framework.results import Outcome
 from framework.runtime.queue_runtime import wait_for_master_queue_schedule
 
@@ -18,6 +18,19 @@ class StubQueue:
 
 
 class SchedulerRoutingTests(unittest.TestCase):
+    def test_successful_login_routes_to_process_transaction(self) -> None:
+        state = self._state(reason="STARTUP", eligible=True)
+        state["runtime_config"]["application_logged_in"] = True
+
+        self.assertEqual("process_transaction", route_after_login_application(state))
+
+    def test_failed_login_routes_to_transition_hub(self) -> None:
+        state = self._state(reason="STARTUP", eligible=True)
+        state["runtime_config"]["application_logged_in"] = False
+        state["runtime_config"]["last_status"] = Outcome.SYSTEM_EXCEPTION
+
+        self.assertEqual("transition_hub", route_after_login_application(state))
+
     def test_retry_routes_to_login_without_fetching_another_transaction(self) -> None:
         state = self._state(reason="RETRY", eligible=True)
         state["runtime_config"]["next_action"] = "RETRY"
