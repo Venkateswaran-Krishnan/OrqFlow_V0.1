@@ -44,6 +44,7 @@ class DatabaseQueue:
                 queue_config["in_progress_status"],
                 queue_config["eligible_status"],
                 application_id,
+                _process_id(self.state),
                 queue_config["in_progress_status"],
             ],
         ) as cursor:
@@ -90,20 +91,36 @@ class DatabaseQueue:
         )
         return txn
 
-    def has_eligible_transactions(self) -> bool:
+    def has_eligible_transactions(self, *, exclude_current_application: bool = False) -> bool:
         queue_config = _queue_config(self.state)
         logger = get_logger("runtime.queue")
+        process_steps = self.state.get("process_steps")
+        applications = (
+            list(dict.fromkeys(step["application_id"] for step in process_steps))
+            if process_steps
+            else _extract_distinct_process_applications(self.state)
+        )
+        if exclude_current_application:
+            active_application = self.state["runtime_config"]["active_application_id"]
+            applications = [app for app in applications if str(app) != str(active_application)]
+        if not applications:
+            return False
+        query = self.db.queries["fetch_any_eligible_transaction"].format(
+            application_placeholders=", ".join(self.db.placeholder for _ in applications)
+        )
         with execute_queue_query(
             self.db,
-            self.db.queries["fetch_any_eligible_transaction"],
+            query,
             [
                 queue_config["in_progress_status"],
                 queue_config["eligible_status"],
+                _process_id(self.state),
+                *applications,
             ],
         ) as cursor:
             has_transaction = cursor.fetchone() is not None
         logger.debug(
-            "Global queue eligibility checked: priority_status=%s, fallback_status=%s, "
+            "Configured queue eligibility checked: priority_status=%s, fallback_status=%s, "
             "has_transaction=%s",
             queue_config["in_progress_status"],
             queue_config["eligible_status"],
@@ -507,6 +524,9 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
 
     db_schema = _tbl_input_schema(db)
     db_columns = set(db_schema)
+    if "Case_Number" in dataframe.columns:
+        dataframe = dataframe.copy()
+        dataframe["Case_Number"] = dataframe["Case_Number"].map(_clean_case_number)
     if "Case_Json" in db_columns:
         # Validate the completed payload, including JSON built from extra columns.
         dataframe = dataframe.copy()
@@ -935,6 +955,13 @@ def _normalize_db_value(value: Any) -> Any:
 
     if hasattr(value, "isoformat"):
         return value.isoformat()
+    return value
+
+
+def _clean_case_number(value: Any) -> Any:
+    value = _normalize_db_value(value)
+    if isinstance(value, str):
+        return "".join(value.replace("'", "").split())
     return value
 
 

@@ -12,9 +12,11 @@ from unittest.mock import patch
 import pandas as pd
 from openpyxl import Workbook
 
+from framework.nodes import route_after_execution_init
 from framework.runtime.queue_db import SQLiteQueueDatabase, load_queue_queries
 from framework.runtime.queue_runtime import (
     _load_api_dataframe,
+    _insert_input_dataframe,
     _is_duplicate_input_error,
     _tbl_input_schema,
     create_master_queue,
@@ -23,6 +25,7 @@ from framework.runtime.queue_runtime import (
     master_queue_interval_hours,
     record_master_queue_run,
 )
+from framework.runtime.transition_runtime import resolve_transition
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -209,6 +212,34 @@ class ExcelMasterQueueTests(unittest.TestCase):
             },
             state["runtime_config"]["queue_creation_summary"],
         )
+
+    def test_case_number_cleanup_before_insert_preserves_nulls_and_leading_zeroes(self) -> None:
+        dataframe = pd.DataFrame([
+            {"Processor": 10, "Chargeback_Date": "2026-05-25", "Case_ID": f"C-{index}",
+             "Case_Number": value}
+            for index, value in enumerate([" ' 00 123\t\n' ", "AB'C\u00a0D", None, pd.NA])
+        ])
+
+        summary = _insert_input_dataframe(self._state(), dataframe)
+
+        self.assertEqual(4, summary["inserted_count"])
+        rows = self.db.connection.execute("SELECT Case_Number FROM tbl_input ORDER BY ID").fetchall()
+        self.assertEqual(["00123", "ABCD", None, None], [row[0] for row in rows])
+        self.assertEqual(" ' 00 123\t\n' ", dataframe.iloc[0]["Case_Number"])
+
+    def test_case_number_cleaned_to_empty_is_rejected_when_required(self) -> None:
+        dataframe = pd.DataFrame([{
+            "Processor": 10, "Chargeback_Date": "2026-05-25", "Case_ID": "C-1",
+            "Case_Number": " '\t\n' ",
+        }])
+        schema = _tbl_input_schema(self.db)
+        schema["Case_Number"]["required"] = True
+        with patch("framework.runtime.queue_runtime._tbl_input_schema", return_value=schema):
+            summary = _insert_input_dataframe(self._state(), dataframe)
+
+        self.assertEqual(1, summary["failed_count"])
+        self.assertIn("Case_Number", summary["failed_rows"][0]["error"])
+        self.assertEqual(0, self._count("tbl_input"))
 
     def test_unmatched_input_columns_are_stored_in_case_json(self) -> None:
         workbook_path = self._write_excel(
@@ -761,8 +792,8 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual(expected_input_id, txn["input_id"])
         self.assertEqual("In Processing", txn["queue_processing_status"])
 
-    def test_global_eligible_check_is_independent_of_active_application(self) -> None:
-        self._insert_input_and_queue("Queue Created", application_id=10)
+    def test_configured_eligible_check_is_independent_of_active_application(self) -> None:
+        self._insert_input_and_queue("Queue Created", application_id=14)
         state = self._state()
         state["runtime_config"]["active_application_id"] = 13
 
@@ -770,6 +801,66 @@ class ExcelMasterQueueTests(unittest.TestCase):
 
         self.assertEqual("NO_TRANSACTION", state["runtime_config"]["last_status"])
         self.assertTrue(state["queue"].has_eligible_transactions())
+
+    def test_fetch_ignores_another_process_for_same_application(self) -> None:
+        unrelated = self._insert_input_and_queue("In Processing", application_id=13)
+        self.db.connection.execute("UPDATE tbl_input SET Process = 99 WHERE ID = ?", [unrelated])
+        expected = self._insert_input_and_queue("Queue Created", application_id=13)
+        state = self._state()
+        state["runtime_config"]["active_application_id"] = 13
+
+        get_next_transaction(state)
+
+        self.assertEqual(expected, state["runtime_config"]["txn"]["input_id"])
+        status = self.db.connection.execute(
+            "SELECT Processing_Status FROM tbl_queue WHERE Case_Details = ?", [unrelated]
+        ).fetchone()[0]
+        self.assertEqual("In Processing", status)
+
+    def test_eligibility_ignores_unfetchable_rows(self) -> None:
+        for reason in ("other_process", "unconfigured_application", "orphan", "completed"):
+            with self.subTest(reason=reason):
+                self.db.connection.execute("DELETE FROM tbl_queue")
+                self.db.connection.execute("DELETE FROM tbl_input")
+                input_id = self._insert_input_and_queue("Queue Created", application_id=13)
+                if reason == "other_process":
+                    self.db.connection.execute("UPDATE tbl_input SET Process = 99 WHERE ID = ?", [input_id])
+                elif reason == "unconfigured_application":
+                    self.db.connection.execute("UPDATE tbl_queue SET Application_Details = 99")
+                elif reason == "orphan":
+                    self.db.connection.execute("UPDATE tbl_queue SET Case_Details = 999999")
+                else:
+                    self.db.connection.execute("UPDATE tbl_queue SET Processing_Status = 'Success'")
+                state = self._state()
+                state["runtime_config"]["active_application_id"] = 13
+
+                get_next_transaction(state)
+
+                self.assertIsNone(state["runtime_config"]["txn"])
+                self.assertFalse(state["queue"].has_eligible_transactions())
+
+    def test_eligibility_switch_check_excludes_current_application(self) -> None:
+        self._insert_input_and_queue("Queue Created", application_id=13)
+        state = self._state()
+        state["runtime_config"]["active_application_id"] = 13
+        get_next_transaction(state)
+        self.assertTrue(state["queue"].has_eligible_transactions())
+        self.assertFalse(state["queue"].has_eligible_transactions(exclude_current_application=True))
+        self._insert_input_and_queue("In Processing", application_id=14)
+        self.assertTrue(state["queue"].has_eligible_transactions(exclude_current_application=True))
+
+    def test_single_application_with_unrelated_work_completes_instead_of_switching(self) -> None:
+        self._insert_input_and_queue("Queue Created", application_id=14)
+        state = self._state(masterbot=False)
+        state["key_steps"] = self._key_steps([(1, 13)])
+        state["process_steps"] = [{"application_id": 13}]
+        state["runtime_config"]["active_application_id"] = 13
+        get_next_transaction(state)
+
+        resolve_transition(state)
+
+        self.assertEqual("BATCH_COMPLETE", state["runtime_config"]["next_action"])
+        self.assertEqual("end", route_after_execution_init(state))
 
     def test_get_next_transaction_returns_no_transaction_when_no_eligible_queue_row(self) -> None:
         self._insert_input_and_queue("Already Done")
@@ -1033,11 +1124,11 @@ class ExcelMasterQueueTests(unittest.TestCase):
             """,
             [
                 10,
-                20,
+                12,
                 "2026-05-25",
                 '{"case": "CASE-1"}',
                 "CASE-1",
-                f"20_CASE-1_{status}_{application_id}",
+                f"12_CASE-1_{status}_{application_id}",
             ],
         )
         input_id = int(cursor.lastrowid)

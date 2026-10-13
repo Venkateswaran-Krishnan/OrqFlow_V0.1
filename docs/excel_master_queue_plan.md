@@ -59,6 +59,7 @@ Supported source adapters:
 ## Input DataFrame Validation Rules
 
 - Excel/API sources should first be normalized into a canonical input DataFrame.
+- Before JSON preparation, validation, and insertion, clean a supplied `Case_Number` in a copy of the DataFrame by removing every apostrophe (`'`) and all whitespace, including internal spaces, tabs, newlines, and Unicode whitespace. For example, ` ' 00 123 ' ` becomes `00123`. Preserve nulls and leading zeroes in strings; numeric values retain their type. A value cleaned to an empty string fails validation if the live schema requires `Case_Number`. The source DataFrame is not modified.
 - Read the live `tbl_input` schema to identify DB columns, then construct `Case_Json` in a copy of the DataFrame before mandatory-column and per-row value validation.
 - Merge existing `Case_Json` object fields with non-DB input columns; extra columns overwrite matching JSON keys. Matching DB columns remain separate fields in the input record.
 - Validate and insert the same constructed `Case_Json` value. A required `Case_Json` can be populated from extra columns even when the source column is absent or blank. An empty constructed payload becomes `None` and fails validation if the DB requires it. Validation checks presence, not keys inside the JSON.

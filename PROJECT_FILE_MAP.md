@@ -65,7 +65,7 @@ Application login behavior. Selects application-specific `LOGIN_APPLICATION` hoo
 Coordinates startup, application batch completion, application switching, retry recovery, optional project-specific reset hooks, and scheduled master-queue refresh preparation.
 
 `framework/runtime/queue_runtime.py`  
-Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Transaction fetch considers configured in-progress and eligible statuses, prioritizing in-progress work for the active application. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
+Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Input preparation removes apostrophes and all whitespace from Case_Number before validation and insertion, preserving nulls and string leading zeroes. Transaction fetch joins input data and filters configured process, active application, and in-progress/eligible statuses, prioritizing in-progress work. Eligibility uses the same join/process/status conditions across configured applications and can exclude the active application for switching. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
 Input preparation reads the live schema and constructs `Case_Json` before mandatory-column and per-row value validation. Validation and insertion use the same completed payload. Preparation logs expose stage completion, row counts, and required field names without source values or JSON payloads.
 
 `framework/runtime/process_runtime.py`
@@ -112,10 +112,10 @@ Covers configured process-module execution, ordered scheduler initialization, Ke
 Covers startup, batch completion, application switching, retry preservation, optional application reset hooks, and reset-hook failures.
 
 `tests/test_transition_runtime.py`
-Covers finalized transaction routing, positive and unlimited batches, retry preservation/exhaustion, and global application-switch decisions.
+Covers finalized transaction routing, positive and unlimited batches, retry preservation/exhaustion, and application-switch decisions.
 
 `tests/test_scheduler_routing.py`
-Covers retry-to-login routing, global queue completion, periodic masterbot due/wait behavior, and wait configuration validation.
+Covers retry-to-login routing, scheduler queue completion, periodic masterbot due/wait behavior, and wait configuration validation.
 
 `tests/test_graph_scheduler_integration.py`
 Runs the compiled graph with simulated queue items to verify multi-application batch order, complete processing, cleanup, and the terminal `END` state.

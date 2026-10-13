@@ -34,15 +34,17 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[Fetch for active_application_id] --> B{Transaction found?}
+    A[Fetch for configured process,<br/>active application, and statuses] --> B{Transaction found?}
     B -->|Yes| C[Process and finalize transaction]
     C --> D[Increment session_batch_count]
     D --> E{Positive BatchCount reached?}
     E -->|No| A
     E -->|Yes| F[EXECUTION_INIT<br/>BATCH_COMPLETE]
-    B -->|No| G{Eligible transaction exists globally?}
+    B -->|No| G{Fetchable work for same process<br/>in another configured application?}
     G -->|Yes| H[EXECUTION_INIT<br/>APP_SWITCH]
-    G -->|No| F
+    G -->|No| M{Bounded transaction wait available?}
+    M -->|Yes: wait_seconds elapsed| A
+    M -->|No| F
     F --> I[Optional project reset hook]
     I --> J[Reset counter and activate next process step]
     J --> K{Work or scheduled master run remains?}
@@ -54,7 +56,8 @@ flowchart TD
 - A positive `BatchCount` closes/resets the application session after that many finalized transactions.
 - Success, skipped business exceptions, and retry-exhausted failures count as finalized; retry attempts do not.
 - With one process application, the same application is reactivated after each positive batch.
-- With multiple process applications, scheduling cycles in numeric KeySteps `Sequence` order until the global eligible queue is empty.
+- With multiple process applications, scheduling cycles in numeric KeySteps `Sequence` order until no fetchable work remains for the configured process and applications.
+- Eligibility joins `tbl_input` and uses the same configured process and statuses as fetching. Orphan queue rows, other processes, and unconfigured applications do not count as scheduler work. `NO_TRANSACTION` requests `APP_SWITCH` only when another configured application has fetchable work; otherwise it uses bounded wait or session completion, followed by periodic masterbot wait or cleanup.
 
 ## Master Queue Creation
 

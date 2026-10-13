@@ -143,20 +143,25 @@ class MySQLQueueTests(unittest.TestCase):
         self.assertEqual("In Processing", txn["queue_processing_status"])
         select.execute.assert_called_once_with(
             self.db.queries["fetch_next_transaction"],
-            ["In Processing", "Queue Created", 68, "In Processing"],
+            ["In Processing", "Queue Created", 68, "100", "In Processing"],
         )
         update.execute.assert_called_once_with(
             self.db.queries["mark_transaction_in_progress"], ["In Processing", "BOT-1", 9]
         )
         self.connection.commit.assert_called_once_with()
 
-    def test_empty_transaction_and_global_eligibility(self):
-        self.use_cursors(self.cursor(), self.cursor([{"ID": 9}]), self.cursor())
+    def test_empty_transaction_and_configured_eligibility(self):
+        eligible = self.cursor([{"ID": 9}])
+        self.use_cursors(self.cursor(), eligible, self.cursor())
         queue = DatabaseQueue(self.state)
 
         self.assertIsNone(queue.fetch_next())
         self.assertTrue(queue.has_eligible_transactions())
         self.assertFalse(queue.has_eligible_transactions())
+        eligible.execute.assert_called_once_with(
+            self.db.queries["fetch_any_eligible_transaction"].format(application_placeholders="%s"),
+            ["In Processing", "Queue Created", "100", 68],
+        )
         self.connection.commit.assert_not_called()
 
     def test_all_final_statuses_bind_comment_and_cto_details(self):

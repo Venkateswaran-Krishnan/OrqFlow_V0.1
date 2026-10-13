@@ -73,7 +73,7 @@ Current service responsibilities:
 | --- | --- |
 | `framework_lifecycle` | Framework-level startup behavior such as queue adapter initialization. |
 | `execution_init_runtime` | Execution-cycle coordination, optional application reset-hook execution, retry preservation, and process-step advancement. |
-| `queue_runtime` | Database-backed master queue creation and scheduling, application-filtered transaction fetch, global eligibility checks, queue status updates, and transaction assignment. |
+| `queue_runtime` | Database-backed master queue creation and scheduling, process/application/status-filtered transaction fetch, configured scheduler eligibility checks, queue status updates, and transaction assignment. |
 | `process_runtime` | Ordered KeySteps scheduler setup, per-session batch tracking, process-module selection, dynamic callable loading, result validation, and process execution. |
 | `transition_runtime` | Final transaction status updates and batch, retry, application-switch, wait, and end decisions. |
 | `cleanup_runtime` | Driver/database shutdown, final runtime action assignment, and execution cleanup. |
@@ -518,7 +518,7 @@ Relationship:
 | `ID` | `bigint` | Primary key, auto-increment. |
 | `Processor` | `mediumint` | Required application/processor reference. |
 | `Process` | `mediumint` | Required process reference. |
-| `Case_Number` | `varchar(100)` | Optional case number. |
+| `Case_Number` | `varchar(100)` | Optional case number; remove all apostrophes and whitespace before validation and insertion. Preserve nulls and string leading zeroes. |
 | `Transaction_ID` | `varchar(100)` | Optional transaction identifier. |
 | `Case_Status` | `varchar(100)` | Optional source case status. |
 | `Chargeback_Date` | `date` | Required chargeback date. |
@@ -587,8 +587,8 @@ The complete schema for these tables must be captured before implementation reli
 - Duplicate processing shall be prevented.
 - Failed transactions shall be recorded with a reason.
 - Queue selection shall consider both `queue_config.in_progress_status` and `queue_config.eligible_status`, prioritizing `In Processing` rows before `Queue Created` rows.
-- Runtime queue selection shall filter eligible records by `runtime_config.active_application_id`.
-- The queue adapter shall also provide a global eligible-record check used to decide whether the scheduler must switch applications or finish; this check shall consider both in-progress and eligible queue statuses.
+- Runtime queue selection shall join `tbl_input` and filter by `process_config.Process_ID`, `runtime_config.active_application_id`, and the configured fetchable statuses.
+- The queue adapter shall provide a scheduler eligibility check using the same input join, process, and statuses, restricted to configured process applications. The `NO_TRANSACTION` switch check shall exclude the active application. Orphan rows, other processes, and unconfigured applications shall not count as work.
 - Queue records shall retain a durable link to `tbl_input.ID`.
 - Master queue creation shall accept supplied items as a DataFrame, whether the upstream source is Excel or an API call.
 - Master queue creation shall insert input details into `tbl_input`, including the full detail payload in `Case_Json`, then create one linked `tbl_queue` row for each distinct application in the sequenced `PROCESS_TRANSACTION` KeySteps.
@@ -653,7 +653,7 @@ The workflow shall include the following logical nodes:
 
 #### MASTER_QUEUE_WAIT
 
-- Used only when periodic masterbot scheduling is enabled, the queue is globally empty, and the next master run is not due.
+- Used only when periodic masterbot scheduling is enabled, no fetchable work remains for the configured process and applications, and the next master run is not due.
 - Sleep for the positive `execution_config.wait_seconds` polling interval.
 - Route back through `EXECUTION_INIT` with reason `MASTER_QUEUE_REFRESH`.
 - Reject blank, zero, negative, or nonnumeric polling intervals to prevent a busy loop.
@@ -731,7 +731,7 @@ Handles transaction status updates and routing decisions for:
 - transition behavior shall be delegated to the transition runtime service
 - increment `session_batch_count` only after a transaction is finalized as success, skipped, or final failure
 - route a completed positive batch through `EXECUTION_INIT`; batch completion does not directly mean `END`
-- when the active application has no work but eligible records exist globally, request `APP_SWITCH`
+- when the active application has no work but another configured application has fetchable records for the same process and configured statuses, request `APP_SWITCH`
 - route to `END` only after application-session reset when no eligible queue work and no periodic masterbot wait remain
 
 ### 10.3 Graph Routing Contract
@@ -756,8 +756,8 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 | `PROCESS_TRANSACTION` | Always after storing result | `TRANSITION_HUB` |
 | `TRANSITION_HUB` | Success/business exception and more work allowed | `GET_TRANSACTION` |
 | `TRANSITION_HUB` | No transaction and wait is enabled/remaining | `GET_TRANSACTION` |
-| `TRANSITION_HUB` | Active application empty but eligible work exists globally | `EXECUTION_INIT` for `APP_SWITCH` |
-| `TRANSITION_HUB` | No eligible transaction remains globally | `EXECUTION_INIT` for session completion |
+| `TRANSITION_HUB` | Active application empty but another configured application has fetchable work for the same process | `EXECUTION_INIT` for `APP_SWITCH` |
+| `TRANSITION_HUB` | No other configured application has fetchable work and bounded transaction wait is exhausted or disabled | `EXECUTION_INIT` for session completion |
 | `TRANSITION_HUB` | System exception and retry remains | `EXECUTION_INIT` |
 | `TRANSITION_HUB` | System exception, retries exhausted, and no active transaction | `END` |
 | `TRANSITION_HUB` | Application switch required | `EXECUTION_INIT` |

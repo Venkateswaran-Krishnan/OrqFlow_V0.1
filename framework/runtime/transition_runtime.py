@@ -82,7 +82,7 @@ def resolve_transition(state: OrqflowState) -> OrqflowState:
 
     if outcome == Outcome.NO_TRANSACTION:
         runtime["txn"] = None
-        if state["queue"].has_eligible_transactions():
+        if state["queue"].has_eligible_transactions(exclude_current_application=True):
             runtime["execution_init_reason"] = "APP_SWITCH"
             runtime["next_action"] = "APP_SWITCH"
             logger.info("Application switch selected; another application has eligible work")

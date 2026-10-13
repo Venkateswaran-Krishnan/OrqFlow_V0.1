@@ -2,6 +2,10 @@
 
 ## Current Implementation (2026-10-13)
 
+Latest source update: transaction fetch now joins `tbl_input` and filters by configured `process_config.Process_ID`, active application, and the two configured fetchable statuses. Scheduler eligibility uses the same join, process, and statuses across configured process applications; the `NO_TRANSACTION` switch check excludes the current application. Unrelated processes, unconfigured applications, and orphan queue rows cannot sustain the scheduler loop. Both MySQL and SQLite SQL were updated.
+
+Input `Case_Number` cleanup removes all apostrophes and whitespace before validation and insertion, preserving nulls and string leading zeroes. The full source suite passed with 109 tests. MySQL coverage uses connector API mocks; no live database was verified. Release `0.1.14` includes these fixes in `dist/framework-0.1.14-py3-none-any.whl`; metadata and all 18 packaged Python files were verified against source. Build/test output is saved in `logs/wheel-build-0.1.14.log` and `logs/release-validation-0.1.14.log`. Deployment must update both the framework package and external shared SQL files. The consuming project's installed copy has not been updated.
+
 SQLite and MySQL are implemented in `framework/runtime/queue_db.py`, with shared queue operations in `framework/runtime/queue_runtime.py`. Release `0.1.12` executes queries through managed cursors for both databases and fixes the MySQL connection-level `execute()` failure. Existing schemas must be provisioned separately.
 
 Select the database with `queue_database.type`. SQLite uses `queue_database.sqlite_path`; MySQL uses `queue_database.host`, `port`, `database`, `username`, and `password`. Queue status names remain under `queue_config`. The original proposal below records planning history; its `queue_config.backend` and `db_path` fields were superseded by `queue_database`.

@@ -1381,3 +1381,25 @@ Deployment status:
 - Verified wheel metadata version 0.1.13, the complete set of 18 framework Python files, and byte-for-byte equality with workspace source.
 - Artifact SHA-256: f9f8a6122ba02d2edf67561d0e3667b2453f2ba388abec165d94610fd12826f6.
 - Project configs remain external to the wheel. The consuming project must include process_config.processor_mapping to enable mapping. This build has not been installed or deployed.
+
+## 2026-10-13 Scheduler Eligibility and Case Number Cleanup
+
+- Confirmed the infinite-loop cause: fetching could return no work for the active application while a status-only global eligibility query remained true. A single configured step then wrapped back to the same application repeatedly.
+- Transaction fetch now filters `tbl_input.Process` using `process_config.Process_ID`, in addition to active application and the configured in-progress/eligible statuses. In-progress priority remains unchanged.
+- Scheduler eligibility now joins `tbl_input`, uses the same process/status conditions, and restricts applications to configured process steps. `NO_TRANSACTION` excludes the current application when checking for switchable work. Other processes, unconfigured applications, and orphan queue rows no longer sustain the loop. Both MySQL and SQLite query files and Python parameter bindings changed together.
+- Before validation and insertion, clean the separate input DataFrame `Case_Number` column by removing all apostrophes and all whitespace, including internal spaces, tabs, newlines, and Unicode whitespace. Nulls and string leading zeroes are preserved; numeric values retain their type. Work on a copy of the DataFrame. Empty cleaned values follow the live schema's required-field rules.
+- Regression tests cover process isolation, unconfigured applications, orphan rows, completed statuses, excluding the current application, single-application completion, cleaned database values, nulls, leading zeroes, source DataFrame preservation, and required-field rejection after cleanup.
+- Updated requirements, project file map, input preparation plan, SQLite/MySQL implementation notes, and scheduler flowchart. Runtime eligibility diagnostics now say `Configured queue eligibility checked`.
+- Verification: `.venv/Scripts/python.exe -m unittest discover -s tests` passed 109 tests; `git diff --check` passed. Fresh test output is saved in `logs/source-validation.log`; historical build and release logs remain as records of their earlier runs. SQLite tests use a local database; MySQL tests use connector API mocks. No live database was verified.
+- Deployment: the existing `dist/framework-0.1.13-py3-none-any.whl` predates these source fixes. No version bump, wheel rebuild, installation, or deployment was performed. The consuming project needs both an updated framework package and updated external shared SQL files; its installed copy remains unchanged.
+
+## 2026-10-13 Version 0.1.14 Build and Repository Sync
+
+- Bumped `pyproject.toml` to `0.1.14` for process-scoped queue selection, configured scheduler eligibility, and Case_Number cleanup.
+- Built `dist/framework-0.1.14-py3-none-any.whl` using `.venv/Scripts/python.exe -m build --wheel --no-isolation`. Output is saved in `logs/wheel-build-0.1.14.log`.
+- Full source suite passed with 109 tests; output is saved in `logs/release-validation-0.1.14.log`. Diff checks passed. MySQL coverage uses connector API mocks; no live database was verified.
+- Verified wheel metadata version `0.1.14` and all 18 packaged Python files byte-for-byte against source.
+- Artifact SHA-256: `25d998bc34479cc641cdc37e854c2bbe952112c0f79b0fc3b6c550ee12a52b54`.
+- Fetched `origin`; local `master` matched `origin/master` before preparing the release commit. Release source, tests, and documentation are being committed and pushed to `origin/master`; the final response reports the confirmed synchronization result.
+- The wheel and validation logs remain local ignored artifacts. The pre-existing untracked `share/config/OrqFlow_Wheel_Test/` directory is excluded from the release commit.
+- This build supersedes the earlier note that no rebuilt wheel exists. It has not been installed into `OTS_RTB_Extraction`. Deploy the updated framework package together with both external queue query files; shared SQL is not packaged in the wheel.

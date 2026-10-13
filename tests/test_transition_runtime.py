@@ -13,7 +13,7 @@ class StubQueue:
         self.skipped = []
         self.failed = []
 
-    def has_eligible_transactions(self) -> bool:
+    def has_eligible_transactions(self, *, exclude_current_application: bool = False) -> bool:
         return self.eligible
 
     def mark_success(

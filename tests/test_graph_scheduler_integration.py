@@ -17,7 +17,7 @@ class SimulatedQueue:
         }
         self.completed: list[str] = []
 
-    def has_eligible_transactions(self) -> bool:
+    def has_eligible_transactions(self, *, exclude_current_application: bool = False) -> bool:
         return any(self.pending.values())
 
     def mark_success(

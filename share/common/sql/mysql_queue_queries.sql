@@ -73,6 +73,7 @@ FROM tbl_queue q
 JOIN tbl_input i ON i.ID = q.Case_Details
 WHERE q.Processing_Status IN (%s, %s)
   AND q.Application_Details = %s
+  AND i.Process = %s
 ORDER BY
     CASE
         WHEN q.Processing_Status = %s THEN 0
@@ -82,10 +83,13 @@ ORDER BY
 LIMIT 1;
 
 -- name: fetch_any_eligible_transaction
-SELECT ID
-FROM tbl_queue
-WHERE Processing_Status IN (%s, %s)
-ORDER BY ID
+SELECT q.ID
+FROM tbl_queue q
+JOIN tbl_input i ON i.ID = q.Case_Details
+WHERE q.Processing_Status IN (%s, %s)
+  AND i.Process = %s
+  AND q.Application_Details IN ({application_placeholders})
+ORDER BY q.ID
 LIMIT 1;
 
 -- name: mark_transaction_in_progress
