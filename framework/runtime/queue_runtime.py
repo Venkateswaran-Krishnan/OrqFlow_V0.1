@@ -507,13 +507,29 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
 
     db_schema = _tbl_input_schema(db)
     db_columns = set(db_schema)
+    if "Case_Json" in db_columns:
+        # Validate the completed payload, including JSON built from extra columns.
+        dataframe = dataframe.copy()
+        dataframe["Case_Json"] = [
+            _merged_case_json_value(
+                row["Case_Json"] if "Case_Json" in dataframe.columns else None,
+                _extra_case_json(row, dataframe.columns, db_columns),
+            )
+            for _, row in dataframe.iterrows()
+        ]
+        logger.info("Input Case_Json construction completed before mandatory-field validation")
+        logger.debug("Case_Json preparation details: row_count=%s", len(dataframe))
+
     required_fields = _required_input_fields(db_schema)
+    logger.debug("Mandatory tbl_input fields: %s", ", ".join(sorted(required_fields)))
     missing_columns = required_fields.difference(dataframe.columns)
     if missing_columns:
+        logger.error("Prepared input is missing mandatory tbl_input columns")
         raise ValueError(
             "Input source missing required tbl_input field(s): "
             + ", ".join(sorted(missing_columns))
         )
+    logger.info("Prepared input mandatory-column validation passed")
     if "Process" not in db_columns:
         raise ValueError("tbl_input.Process column is required")
 
@@ -552,7 +568,7 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         if row_error is not None:
             summary["failed_rows"].append({"row": excel_row_number, "error": row_error})
             summary["failed_count"] += 1
-            logger.warning("Input row rejected during validation")
+            logger.warning("Prepared input row rejected during mandatory-field validation")
             logger.debug(
                 "Input row validation failure: row=%s, error=%s",
                 excel_row_number,
@@ -561,19 +577,13 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
             continue
 
         values = []
-        extra_case_json = _extra_case_json(row, dataframe.columns, db_columns)
         for column in insertable_columns:
             if column == "Process":
                 values.append(process_id)
             elif column == "Input_Identifier":
                 values.append(f"{process_id}_{row['Case_ID']}")
             elif column == "Case_Json":
-                values.append(
-                    _merged_case_json_value(
-                        row["Case_Json"] if "Case_Json" in dataframe.columns else None,
-                        extra_case_json,
-                    )
-                )
+                values.append(row["Case_Json"])
             else:
                 values.append(_normalize_db_value(row[column]))
 

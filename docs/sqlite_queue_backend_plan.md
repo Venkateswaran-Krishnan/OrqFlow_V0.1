@@ -8,6 +8,8 @@ Select the database with `queue_database.type`. SQLite uses `queue_database.sqli
 
 Validation: the source suite passed with 99 tests and 20 subtests, including SQLite database behavior and MySQL connector API mocks. A live MySQL run remains to be verified after installing the updated wheel in the consuming project.
 
+Current source input preparation constructs `Case_Json` before mandatory-field validation. It merges existing JSON object fields with non-DB input columns, preserving matching DB columns separately. The completed payload is included in the validated DataFrame and inserted unchanged. Required fields derive from the live database schema; an empty constructed payload fails when `Case_Json` is `NOT NULL`. Runtime logs report preparation and validation stages without including input values or JSON payloads. The `0.1.12` wheel was rebuilt with this change on 2026-10-13; the full source suite passed with 101 tests in the project Python 3.12 environment, including MySQL connector API mocks. A live MySQL run remains unverified.
+
 ## Summary
 
 Add SQLite as the local queue database while preserving the production DB table model. SQLite will replicate the production schema from `docs/db_Schema_Full.sql`, especially `tbl_input` and `tbl_queue`. The framework will stop using `InMemoryQueue` and route queue creation, transaction fetch, runtime updates, and final status updates through a SQLite queue adapter.

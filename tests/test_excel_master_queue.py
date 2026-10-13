@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 from openpyxl import Workbook
@@ -15,6 +16,7 @@ from framework.runtime.queue_db import SQLiteQueueDatabase, load_queue_queries
 from framework.runtime.queue_runtime import (
     _load_api_dataframe,
     _is_duplicate_input_error,
+    _tbl_input_schema,
     create_master_queue,
     get_next_transaction,
     is_master_queue_due,
@@ -248,6 +250,50 @@ class ExcelMasterQueueTests(unittest.TestCase):
             },
             json.loads(row["Case_Json"]),
         )
+
+    def test_required_case_json_is_constructed_before_validation(self) -> None:
+        schema = _tbl_input_schema(self.db)
+        schema["Case_Json"]["required"] = True
+        for include_case_json in (False, True):
+            with self.subTest(include_case_json=include_case_json):
+                columns = ["Processor", "Chargeback_Date", "Case_ID", "Extra"]
+                values = [10, "2026-05-25", f"CASE-{include_case_json}", "detail"]
+                if include_case_json:
+                    columns.append("Case_Json")
+                    values.append(None)
+                workbook_path = self._write_excel(columns, [values])
+                state = self._state(queue_file=workbook_path.name)
+                with patch(
+                    "framework.runtime.queue_runtime._tbl_input_schema", return_value=schema
+                ), self.assertLogs("framework.runtime.queue", level="DEBUG") as logs:
+                    create_master_queue(state)
+                output = "\n".join(logs.output)
+                self.assertLess(
+                    output.index("Input Case_Json construction completed"),
+                    output.index("Prepared input mandatory-column validation passed"),
+                )
+                self.assertIn("Mandatory tbl_input fields:", output)
+                self.assertNotIn('{"Extra": "detail"}', output)
+                self.assertEqual(1, state["runtime_config"]["input_load_summary"]["inserted_count"])
+                row = self.db.connection.execute(
+                    "SELECT Case_Json FROM tbl_input WHERE Case_ID = ?", [values[2]]
+                ).fetchone()
+                self.assertEqual({"Extra": "detail"}, json.loads(row["Case_Json"]))
+
+    def test_required_case_json_rejects_empty_constructed_payload(self) -> None:
+        schema = _tbl_input_schema(self.db)
+        schema["Case_Json"]["required"] = True
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID", "Case_Json"],
+            [[10, "2026-05-25", "CASE-EMPTY", "{}"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        with patch("framework.runtime.queue_runtime._tbl_input_schema", return_value=schema):
+            create_master_queue(state)
+        summary = state["runtime_config"]["input_load_summary"]
+        self.assertEqual(1, summary["failed_count"])
+        self.assertIn("Case_Json", summary["failed_rows"][0]["error"])
+        self.assertEqual(0, self._count("tbl_input"))
 
     def test_unmatched_input_columns_merge_with_existing_case_json(self) -> None:
         workbook_path = self._write_excel(

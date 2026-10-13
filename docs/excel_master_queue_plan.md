@@ -59,6 +59,9 @@ Supported source adapters:
 ## Input DataFrame Validation Rules
 
 - Excel/API sources should first be normalized into a canonical input DataFrame.
+- Read the live `tbl_input` schema to identify DB columns, then construct `Case_Json` in a copy of the DataFrame before mandatory-column and per-row value validation.
+- Merge existing `Case_Json` object fields with non-DB input columns; extra columns overwrite matching JSON keys. Matching DB columns remain separate fields in the input record.
+- Validate and insert the same constructed `Case_Json` value. A required `Case_Json` can be populated from extra columns even when the source column is absent or blank. An empty constructed payload becomes `None` and fails validation if the DB requires it. Validation checks presence, not keys inside the JSON.
 - Required input fields come dynamically from the `tbl_input` schema:
   - DB `NOT NULL` columns are required.
   - `ID`, `Process`, and `Input_Identifier` are excluded from source requirements.
@@ -72,7 +75,7 @@ Supported source adapters:
 ```
 
 - Insert optional columns only when the DataFrame header exactly matches a `tbl_input` DB column.
-- Ignore extra non-DB DataFrame columns.
+- Preserve extra non-DB DataFrame columns inside `Case_Json` when that DB column exists.
 - Ignore a source `Process` column if present.
 - If required fields are missing from the DataFrame, raise an exception and stop before inserting any rows.
 
@@ -92,6 +95,7 @@ Supported source adapters:
   - Continue with the next row.
   - Keep earlier committed rows.
 - If a row is missing a required value, skip that row and record the reason.
+- Log JSON construction and successful mandatory-column validation at `INFO`; log row count and mandatory field names at `DEBUG`. Row validation failures use `WARNING`, with row number and reason at `DEBUG`. These preparation logs do not include input values or JSON payloads.
 - Newly inserted inputs initially retain an empty/null `Status` and are then included in queue creation.
 
 ## Queue Creation Behavior

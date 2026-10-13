@@ -66,6 +66,7 @@ Coordinates startup, application batch completion, application switching, retry 
 
 `framework/runtime/queue_runtime.py`  
 Database-backed queue behavior: Excel/API input loading, master queue creation, transaction fetch, queue status updates, and runtime transaction assignment. Transaction fetch considers configured in-progress and eligible statuses, prioritizing in-progress work for the active application. Database-rejected duplicate input identifiers are recorded as informational skips; genuine insert failures remain errors.
+Input preparation reads the live schema and constructs `Case_Json` before mandatory-column and per-row value validation. Validation and insertion use the same completed payload. Preparation logs expose stage completion, row counts, and required field names without source values or JSON payloads.
 
 `framework/runtime/process_runtime.py`
 Loads the ordered `PROCESS_TRANSACTION` scheduler definitions, validates KeySteps `BatchCount`, tracks the active application session, selects and invokes the configured `package.module:function`, validates its result, and maps failures to framework outcomes.

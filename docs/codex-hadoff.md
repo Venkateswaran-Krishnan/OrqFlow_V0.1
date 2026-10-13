@@ -1350,3 +1350,16 @@ Deployment status:
 
 - Rerun the worker to verify application validation, input/queue creation, and transaction processing against the configured MySQL database.
 - The supplied worker log also showed a separate document archival collision (`FileExistsError` for a different document already at the destination). That application-level issue remains unresolved by the database fix.
+
+## 2026-10-13 Case JSON Preparation Before Mandatory Validation
+
+- Input insertion now reads the live `tbl_input` schema, constructs `Case_Json` in a copied DataFrame, validates mandatory columns and per-row values, and inserts the validated payload.
+- Existing JSON object fields merge with non-DB source columns; extra fields overwrite matching JSON keys. Matching DB columns remain separate input fields.
+- Missing or blank source `Case_Json` can be populated from extra columns before a DB `NOT NULL` requirement is checked. An empty constructed payload becomes `None` and is rejected when required. Validation does not inspect keys inside JSON.
+- Runtime logs now report JSON construction and mandatory-column validation completion at `INFO`, row count and required field names at `DEBUG`, and row validation rejection at `WARNING`. Preparation logs omit input values and JSON payloads.
+- Updated requirements, project file map, Excel queue plan, and current SQLite/MySQL implementation notes.
+- Verification: 46 Excel/master-queue and safe-logging tests passed, including construction-before-validation, empty-payload rejection, and log ordering. Diff checks passed. MySQL regression tests could not run in the current Python environment because `mysql-connector-python` is missing.
+- Release verification used `.venv/Scripts/python.exe` (Python 3.12.10), where the MySQL connector is available. The full source suite passed with 101 tests, including MySQL API mock coverage; no live MySQL database was verified.
+- Rebuilt `dist/framework-0.1.12-py3-none-any.whl` with `python -m build --wheel --no-isolation`. Verified all 18 packaged Python source files byte-for-byte against the workspace and confirmed wheel metadata version `0.1.12`.
+- Rebuilt artifact SHA-256: `62AA954E90B787623E15C2E5A4F8D220AA959A0F750B248D5524F91D7A2BDBED`.
+- The wheel remains a local artifact under ignored `dist/`; it has not been installed into the consuming project. Source, regression tests, and documentation are prepared for commit and synchronization with `origin/master`.
