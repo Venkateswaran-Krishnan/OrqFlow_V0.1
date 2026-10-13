@@ -1,5 +1,13 @@
 # SQLite Queue Backend Plan
 
+## Current Implementation (2026-10-13)
+
+SQLite and MySQL are implemented in `framework/runtime/queue_db.py`, with shared queue operations in `framework/runtime/queue_runtime.py`. Release `0.1.12` executes queries through managed cursors for both databases and fixes the MySQL connection-level `execute()` failure. Existing schemas must be provisioned separately.
+
+Select the database with `queue_database.type`. SQLite uses `queue_database.sqlite_path`; MySQL uses `queue_database.host`, `port`, `database`, `username`, and `password`. Queue status names remain under `queue_config`. The original proposal below records planning history; its `queue_config.backend` and `db_path` fields were superseded by `queue_database`.
+
+Validation: the source suite passed with 99 tests and 20 subtests, including SQLite database behavior and MySQL connector API mocks. A live MySQL run remains to be verified after installing the updated wheel in the consuming project.
+
 ## Summary
 
 Add SQLite as the local queue database while preserving the production DB table model. SQLite will replicate the production schema from `docs/db_Schema_Full.sql`, especially `tbl_input` and `tbl_queue`. The framework will stop using `InMemoryQueue` and route queue creation, transaction fetch, runtime updates, and final status updates through a SQLite queue adapter.

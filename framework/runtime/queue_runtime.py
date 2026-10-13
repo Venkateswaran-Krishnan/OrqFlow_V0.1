@@ -12,6 +12,7 @@ from typing import Any
 
 from framework.logging_config import get_logger
 from framework.results import Outcome
+from framework.runtime.queue_db import execute_queue_query
 from framework.state import OrqflowState
 
 
@@ -36,7 +37,8 @@ class DatabaseQueue:
             queue_config["in_progress_status"],
             queue_config["eligible_status"],
         )
-        cursor = self.db.connection.execute(
+        with execute_queue_query(
+            self.db,
             self.db.queries["fetch_next_transaction"],
             [
                 queue_config["in_progress_status"],
@@ -44,8 +46,8 @@ class DatabaseQueue:
                 application_id,
                 queue_config["in_progress_status"],
             ],
-        )
-        row = cursor.fetchone()
+        ) as cursor:
+            row = cursor.fetchone()
         if row is None:
             logger.debug(
                 "No queue transaction matched fetch statuses: application_id=%s, "
@@ -66,14 +68,16 @@ class DatabaseQueue:
             txn.get("queue_application_details"),
             original_status,
         )
-        self.db.connection.execute(
+        with execute_queue_query(
+            self.db,
             self.db.queries["mark_transaction_in_progress"],
             [
                 queue_config["in_progress_status"],
                 _bot_name(self.state),
                 txn["queue_id"],
             ],
-        )
+        ):
+            pass
         self.db.connection.commit()
         txn["queue_processing_status"] = queue_config["in_progress_status"]
         txn["case_json"] = _parse_case_json(txn.get("input_case_json"))
@@ -89,14 +93,15 @@ class DatabaseQueue:
     def has_eligible_transactions(self) -> bool:
         queue_config = _queue_config(self.state)
         logger = get_logger("runtime.queue")
-        cursor = self.db.connection.execute(
+        with execute_queue_query(
+            self.db,
             self.db.queries["fetch_any_eligible_transaction"],
             [
                 queue_config["in_progress_status"],
                 queue_config["eligible_status"],
             ],
-        )
-        has_transaction = cursor.fetchone() is not None
+        ) as cursor:
+            has_transaction = cursor.fetchone() is not None
         logger.debug(
             "Global queue eligibility checked: priority_status=%s, fallback_status=%s, "
             "has_transaction=%s",
@@ -159,7 +164,8 @@ class DatabaseQueue:
         if txn is None:
             return
         logger = get_logger("runtime.queue")
-        self.db.connection.execute(
+        with execute_queue_query(
+            self.db,
             self.db.queries[query_name],
             [
                 status,
@@ -172,7 +178,8 @@ class DatabaseQueue:
                 cto_details,
                 txn["queue_id"],
             ],
-        )
+        ):
+            pass
         self.db.connection.commit()
         txn["queue_processing_status"] = status
         txn["queue_bot_comment"] = reason
@@ -571,7 +578,8 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
                 values.append(_normalize_db_value(row[column]))
 
         try:
-            cursor = db.connection.execute(sql, values)
+            with execute_queue_query(db, sql, values) as cursor:
+                inserted_id = cursor.lastrowid
             db.connection.commit()
         except Exception as error:
             db.connection.rollback()
@@ -593,7 +601,7 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
             )
             continue
         summary["inserted_count"] += 1
-        summary["inserted_input_ids"].append(cursor.lastrowid)
+        summary["inserted_input_ids"].append(inserted_id)
 
     return summary
 
@@ -671,7 +679,8 @@ def _positive_application_id(value: Any, excel_row: int) -> int:
 
 
 def _validate_application_ids(db: Any, application_ids: list[int]) -> None:
-    rows = db.connection.execute(db.queries["select_application_ids"]).fetchall()
+    with execute_queue_query(db, db.queries["select_application_ids"]) as cursor:
+        rows = cursor.fetchall()
     valid_ids = {int(_row_value(row, "ID", 0)) for row in rows}
     missing_ids = [
         application_id
@@ -687,10 +696,12 @@ def _validate_application_ids(db: Any, application_ids: list[int]) -> None:
 
 def _select_eligible_inputs(state: OrqflowState, process_id: str) -> list[Any]:
     db = _active_queue_db(state)
-    return db.connection.execute(
+    with execute_queue_query(
+        db,
         db.queries["select_inputs_for_queue_creation"],
         [process_id],
-    ).fetchall()
+    ) as cursor:
+        return cursor.fetchall()
 
 
 def _create_queue_set_for_input(
@@ -702,19 +713,23 @@ def _create_queue_set_for_input(
 ) -> int:
     db = _active_queue_db(state)
     for application_id in application_ids:
-        db.connection.execute(
+        with execute_queue_query(
+            db,
             db.queries["insert_tbl_queue"],
             [input_id, application_id, queue_status],
-        )
+        ):
+            pass
 
-    cursor = db.connection.execute(
+    with execute_queue_query(
+        db,
         db.queries["mark_input_queue_created"],
         [queue_status, input_id, process_id],
-    )
-    if cursor.rowcount != 1:
+    ) as cursor:
+        updated_count = cursor.rowcount
+    if updated_count != 1:
         raise RuntimeError(
             f"Expected to mark one tbl_input row as queue created for input ID {input_id}; "
-            f"updated {cursor.rowcount}"
+            f"updated {updated_count}"
         )
     db.connection.commit()
     return len(application_ids)
@@ -786,7 +801,8 @@ def _tbl_input_columns(db: Any) -> set[str]:
 
 def _tbl_input_schema(db: Any) -> dict[str, dict[str, Any]]:
     query = db.queries["tbl_input_columns"]
-    rows = db.connection.execute(query).fetchall()
+    with execute_queue_query(db, query) as cursor:
+        rows = cursor.fetchall()
     columns: dict[str, dict[str, Any]] = {}
     for row in rows:
         if db.db_type == "sqlite":

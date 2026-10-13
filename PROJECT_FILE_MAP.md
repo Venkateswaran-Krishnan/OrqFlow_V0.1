@@ -52,6 +52,9 @@ Configures logging, rotating file logs, console output, and trace events.
 
 ## Runtime
 
+`framework/runtime/queue_db.py`
+Initializes SQLite/MySQL adapters, loads named SQL blocks, and provides `execute_queue_query()`. MySQL uses buffered dictionary cursors; SQLite uses named rows. The execution context closes cursors on success and failure, while the queue runtime controls commits and rollbacks.
+
 `framework/runtime/framework_lifecycle.py`  
 Framework startup behavior. Loads `KeySteps.xlsx`, initializes the configured queue database adapter, and invokes an optional `FRAMEWORK_INIT` KeySteps hook. Initialization failures set `SYSTEM_EXCEPTION` and route safely to `END`.
 
@@ -78,6 +81,9 @@ Marks the runtime package.
 
 ## Shared Runtime Assets
 
+`share/common/sql/sqlite_queue_queries.sql` and `share/common/sql/mysql_queue_queries.sql`
+Matching named queue operations for the two database dialects. SQLite binds values with `?`; MySQL binds values with `%s`.
+
 `share/common/__init__.py`  
 Marks `share/common` as the shared utility package for process reusable code.
 
@@ -91,6 +97,9 @@ Reads Excel worksheets in read-only mode and returns `pandas.DataFrame` objects 
 Repo-local shared config model, including global config, project config, app modules, bot config, and input files.
 
 ## Tests
+
+`tests/test_mysql_queue.py`
+Covers queue operations against mocks constrained to the MySQL connector API: application validation, schema reads, input insertion, queue creation, duplicate skips, rollback, transaction fetching, eligibility checks, final statuses, and cursor cleanup. Does not connect to a live MySQL server.
 
 `tests/test_excel_master_queue.py`
 Covers input loading, queue creation, SQLite/MySQL duplicate-input recognition, informational skip behavior, database status updates, transaction fetching, and genuine queue failure behavior.

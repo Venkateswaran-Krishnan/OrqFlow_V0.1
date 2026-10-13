@@ -427,7 +427,20 @@ The process callable must return a mapping compatible with `StepResult`. Missing
 
 ### 9.1 Design
 
-The framework shall use a DB-driven queue as the source of transactions. The local implementation shall use SQLite to manage the queue while replicating the production DB table model. The framework shall keep DB access behind the queue adapter/runtime boundary so locking, status updates, and future schema refinements do not leak into LangGraph nodes or process automation modules.
+The framework shall use a DB-driven queue as the source of transactions, supporting both SQLite and MySQL through `queue_database.type`. SQLite shall replicate the production DB table model for local operation; MySQL shall use the configured server database. The framework shall keep DB access behind the queue adapter/runtime boundary so locking, status updates, and future schema refinements do not leak into LangGraph nodes or process automation modules.
+
+Queue database rules:
+
+- Set `queue_database.type` to `sqlite` or `mysql`.
+- SQLite requires `queue_database.sqlite_path` pointing to an existing database file.
+- MySQL requires `host`, `port`, `database`, `username`, and `password` under `queue_database`; optional `charset` and `connect_timeout` default to `utf8mb4` and 10 seconds.
+- Load the matching named SQL file from `<share_root>/common/sql/sqlite_queue_queries.sql` or `mysql_queue_queries.sql`.
+- Execute all queue reads and writes through `execute_queue_query()` in `framework/runtime/queue_db.py`. MySQL shall use buffered dictionary cursors; SQLite shall use its configured named-row factory. Do not call `execute()` on a MySQL connection.
+- Bind parameters using `?` for SQLite and `%s` for MySQL. Never interpolate input values into SQL text.
+- Close cursors after successful operations and execution failures. Capture insert IDs and affected-row counts before closing the cursor.
+- Keep transaction commits and rollbacks in the queue runtime. A failed queue set shall roll back all queue rows created for that input.
+
+Framework release `0.1.12` fixes MySQL query execution across application validation, schema inspection, input insertion, queue creation, transaction fetching, eligibility checks, and final status updates. SQLite behavior is covered with local database tests; MySQL behavior is covered with connector API mocks. Live MySQL verification remains a deployment check.
 
 The current schema baseline is `docs/db_Schema_Full.sql`, captured from MySQL 8.0.35 database `rpa_test_new` on 2026-05-15 using a no-data dump for:
 
@@ -839,6 +852,8 @@ Logging shall:
 - record handled business failures at `WARNING`
 - record handled technical failures at `ERROR`
 - record unexpected raised exceptions with the exception message and traceback
+- record database initialization separately from queue execution: a successful connection does not establish that a later query succeeded
+- keep duplicate input skips at `INFO`; keep genuine database failures at `ERROR` with rollback and traceback details
 - avoid logging document contents and extracted OCR output
 - prevent customer data, parsed case payloads, process results, and OCR values from being interpolated into transaction-fetch or transition-input messages
 
@@ -901,7 +916,7 @@ The Orqflow framework shall provide a state-driven automation foundation where:
 - **Repository** provides dynamic locators.
 - **Config** controls framework and process behavior.
 - **Logging Config** controls operational logging and rolling files.
-- **Queue** feeds transactions through a SQLite-backed model that mirrors the production queue/input schema.
+- **Queue** feeds transactions through the configured SQLite or MySQL database using the production queue/input table model.
 - **Runtime Modules** supply configured init and process functions.
 - **Automation Steps** drive keyword-based function execution from Excel/CSV definitions.
 

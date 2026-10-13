@@ -1313,3 +1313,40 @@ Verification:
 - Compile and diff checks passed.
 - Focused lifecycle, login, routing, graph, and scheduler coverage passed with `24 tests`.
 - Full source suite passed with `92 tests and 17 subtests`.
+
+## 2026-10-13 MySQL Queue Query Execution
+
+Confirmed failure:
+
+- The consuming `OTS_RTB_Extraction` worker connected to MySQL successfully, then failed during `MASTER_QUEUE_CREATOR` application validation with `AttributeError: 'MySQLConnection' object has no attribute 'execute'`.
+- Queue runtime used SQLite's connection-level execution API for both database types.
+
+Changes:
+
+- All queue queries now use `execute_queue_query()` in `framework/runtime/queue_db.py`. MySQL uses buffered dictionary cursors; SQLite retains named rows and its existing SQL parameters.
+- Cursors close after reads, writes, and execution failures. Insert IDs and update counts are captured before cursor cleanup; commits and per-input rollback behavior remain intact.
+- Added MySQL API regression coverage for master queue creation, duplicate input handling, queue rollback, transaction fetching, eligibility checks, and all final statuses.
+- Updated `Orqflow_Requirement.md`, `PROJECT_FILE_MAP.md`, and the current implementation notes in `docs/sqlite_queue_backend_plan.md` to document both supported backends and their configuration.
+- Existing runtime log levels remain: successful initialization/queue creation and duplicate skips at `INFO`, queue diagnostics at `DEBUG`, and genuine failures at `ERROR` with tracebacks.
+- Package version bumped to `0.1.12`.
+
+Verification and artifact:
+
+- Full suite passed with `99 tests and 20 subtests`; diff checks passed.
+- SQLite tests exercise local database behavior. MySQL regression tests use connector API mocks; no live database was modified or verified.
+- Built and verified artifact: `dist/framework-0.1.12-py3-none-any.whl`.
+- Artifact SHA-256 after the requested release rebuild: `022B6F5FF3A81830AF5A905FCE7C0C1CC6EE0F61298AC1419BEA72C76D99B469`.
+- Release rebuild verified wheel version `0.1.12` and all packaged Python source against the workspace. Repeated full suite passed with `99 tests and 20 subtests`.
+- Release source, regression tests, and documentation are prepared for commit on `master` and synchronization with `origin/master`. The wheel is a local build artifact under ignored `dist/`.
+
+Deployment status:
+
+- The updated wheel has not been installed into `OTS_RTB_Extraction` by this session.
+- From the consuming project's directory, install it with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --no-deps --upgrade "..\OrqflowV0.1\dist\framework-0.1.12-py3-none-any.whl"
+```
+
+- Rerun the worker to verify application validation, input/queue creation, and transaction processing against the configured MySQL database.
+- The supplied worker log also showed a separate document archival collision (`FileExistsError` for a different document already at the destination). That application-level issue remains unresolved by the database fix.

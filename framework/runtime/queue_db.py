@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 
 class QueueDatabaseError(RuntimeError):
@@ -15,6 +16,7 @@ class QueueDatabaseAdapter(Protocol):
     db_type: str
     placeholder: str
     queries: dict[str, str]
+    connection: Any
 
     def connect(self) -> Any:
         ...
@@ -24,6 +26,25 @@ class QueueDatabaseAdapter(Protocol):
 
     def describe(self) -> dict[str, Any]:
         ...
+
+
+@contextmanager
+def execute_queue_query(
+    db: QueueDatabaseAdapter,
+    query: str,
+    parameters: list[Any] | tuple[Any, ...] = (),
+) -> Iterator[Any]:
+    if db.db_type == "mysql":
+        cursor = db.connection.cursor(dictionary=True, buffered=True)
+    elif db.db_type == "sqlite":
+        cursor = db.connection.cursor()
+    else:
+        raise QueueDatabaseError(f"Unsupported queue database type: {db.db_type}")
+    try:
+        cursor.execute(query, parameters)
+        yield cursor
+    finally:
+        cursor.close()
 
 
 @dataclass
