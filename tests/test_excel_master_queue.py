@@ -377,6 +377,63 @@ class ExcelMasterQueueTests(unittest.TestCase):
         self.assertEqual(3, summary["failed_rows"][0]["row"])
         self.assertIn("Processor", summary["failed_rows"][0]["error"])
 
+    def test_processor_mapping_normalizes_names_and_rejects_invalid_rows(self) -> None:
+        workbook_path = self._write_excel(
+            ["Processor", "Chargeback_Date", "Case_ID", "Extra"],
+            [
+                [" fI sErV ", "2026-05-25", "CASE-1", "detail"],
+                ["CHASE", "2026-05-25", "CASE-2", "detail"],
+                ["dis cover", "2026-05-25", "CASE-3", "detail"],
+                [" American\tExpress ", "2026-05-25", "CASE-4", "detail"],
+                ["Unknown", "2026-05-25", "CASE-5", "detail"],
+                [None, "2026-05-25", "CASE-6", "detail"],
+                ["   ", "2026-05-25", "CASE-7", "detail"],
+                [14, "2026-05-25", "CASE-8", "detail"],
+                ["Fiserv", "2026-05-25", "CASE-9", "detail"],
+            ],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        state["config"]["process_config"]["processor_mapping"] = {
+            "Fiserv": 14, "Chase": 13, "Discover": 16, "American Express": 15,
+        }
+
+        with self.assertLogs("framework.runtime.queue", level="DEBUG") as logs:
+            create_master_queue(state)
+
+        rows = self.db.connection.execute(
+            "SELECT Processor, Case_Json FROM tbl_input ORDER BY ID"
+        ).fetchall()
+        self.assertEqual([14, 13, 16, 15, 14], [row["Processor"] for row in rows])
+        self.assertTrue(all(json.loads(row["Case_Json"]) == {"Extra": "detail"} for row in rows))
+        summary = state["runtime_config"]["input_load_summary"]
+        self.assertEqual(5, summary["inserted_count"])
+        self.assertEqual(4, summary["failed_count"])
+        self.assertEqual([6, 7, 8, 9], [row["row"] for row in summary["failed_rows"]])
+        self.assertIn("no configured mapping: Unknown", summary["failed_rows"][0]["error"])
+        self.assertIn("blank or missing", summary["failed_rows"][1]["error"])
+        self.assertTrue(any("row=6" in message and "Unknown" in message for message in logs.output))
+        self.assertTrue(any(
+            "row_count=9, mapped_count=5, rejected_count=4" in message
+            for message in logs.output
+        ))
+        self.assertTrue(any("row=2, processor_id=14" in message for message in logs.output))
+
+    def test_processor_mapping_rejects_rows_when_processor_column_is_missing(self) -> None:
+        workbook_path = self._write_excel(
+            ["Chargeback_Date", "Case_ID"],
+            [["2026-05-25", "CASE-1"], ["2026-05-25", "CASE-2"]],
+        )
+        state = self._state(queue_file=workbook_path.name)
+        state["config"]["process_config"]["processor_mapping"] = {"Fiserv": 14}
+
+        create_master_queue(state)
+
+        summary = state["runtime_config"]["input_load_summary"]
+        self.assertEqual(0, self._count("tbl_input"))
+        self.assertEqual(2, summary["failed_count"])
+        self.assertEqual([2, 3], [row["row"] for row in summary["failed_rows"]])
+        self.assertTrue(all("blank or missing" in row["error"] for row in summary["failed_rows"]))
+
     def test_duplicate_input_identifier_skips_row_and_continues(self) -> None:
         workbook_path = self._write_excel(
             ["Processor", "Chargeback_Date", "Case_ID"],

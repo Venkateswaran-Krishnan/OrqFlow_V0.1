@@ -12,6 +12,8 @@ Current source input preparation constructs `Case_Json` before mandatory-field v
 
 ## Summary
 
+Release update (2026-10-13): `0.1.13` includes input `Processor` mapping through `process_config.processor_mapping` after `Case_Json` construction. Matching ignores case and all whitespace. Blank, missing, and unmapped values reject their row while valid rows continue; the insert summary records failures. Mapping logs counts at `INFO`, successful row mappings at `DEBUG`, and rejected row numbers and reasons at `WARNING`. See `excel_master_queue_plan.md` for configuration and compatibility behavior. Built `dist/framework-0.1.13-py3-none-any.whl` and verified all 18 packaged Python files against source. All 103 source tests passed, including MySQL connector API mocks. Project configs remain external to the wheel; the consuming project must configure the mapping. The artifact has not been installed or deployed.
+
 Add SQLite as the local queue database while preserving the production DB table model. SQLite will replicate the production schema from `docs/db_Schema_Full.sql`, especially `tbl_input` and `tbl_queue`. The framework will stop using `InMemoryQueue` and route queue creation, transaction fetch, runtime updates, and final status updates through a SQLite queue adapter.
 
 ## Key Changes

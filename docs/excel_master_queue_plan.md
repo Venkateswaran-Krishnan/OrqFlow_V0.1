@@ -62,6 +62,20 @@ Supported source adapters:
 - Read the live `tbl_input` schema to identify DB columns, then construct `Case_Json` in a copy of the DataFrame before mandatory-column and per-row value validation.
 - Merge existing `Case_Json` object fields with non-DB input columns; extra columns overwrite matching JSON keys. Matching DB columns remain separate fields in the input record.
 - Validate and insert the same constructed `Case_Json` value. A required `Case_Json` can be populated from extra columns even when the source column is absent or blank. An empty constructed payload becomes `None` and fails validation if the DB requires it. Validation checks presence, not keys inside the JSON.
+- After `Case_Json` construction and before mandatory validation, map the DataFrame's `Processor` names to integer IDs using `process_config.processor_mapping` in `project_config.json`. Matching removes all whitespace and ignores case in both source names and config keys. This reads the separate `Processor` column, not fields inside `Case_Json`.
+- Both supplied project configs define Fiserv as `14`, Chase as `13`, Discover as `16`, and American Express as `15`:
+
+```json
+"processor_mapping": {
+  "Fiserv": 14,
+  "Chase": 13,
+  "Discover": 16,
+  "American Express": 15
+}
+```
+
+- When mapping is configured, blank, missing, or unmapped `Processor` values reject only that row. A missing source `Processor` column rejects all source rows through the same per-row path. Numeric source IDs also reject unless explicitly present as mapping keys. Rejections increment `input_load_summary.failed_count` and record the row number and reason in `failed_rows`; valid rows continue.
+- A configured mapping must be a non-empty JSON object with non-blank names, integer values, and no duplicate names after normalization. Invalid configuration stops input loading. If the mapping is omitted, legacy Processor handling remains in effect.
 - Required input fields come dynamically from the `tbl_input` schema:
   - DB `NOT NULL` columns are required.
   - `ID`, `Process`, and `Input_Identifier` are excluded from source requirements.
@@ -96,6 +110,7 @@ Supported source adapters:
   - Keep earlier committed rows.
 - If a row is missing a required value, skip that row and record the reason.
 - Log JSON construction and successful mandatory-column validation at `INFO`; log row count and mandatory field names at `DEBUG`. Row validation failures use `WARNING`, with row number and reason at `DEBUG`. These preparation logs do not include input values or JSON payloads.
+- Processor mapping logs total, mapped, and rejected row counts at `INFO`. Successful mappings log row number and numeric processor ID at `DEBUG`; mapping rejections log row number and reason at `WARNING`, including the unmatched Processor value when present. These logs omit other input fields and JSON payloads. Mapping counts describe preparation, not successful database inserts. An absent mapping is logged at `DEBUG`.
 - Newly inserted inputs initially retain an empty/null `Status` and are then included in queue creation.
 
 ## Queue Creation Behavior

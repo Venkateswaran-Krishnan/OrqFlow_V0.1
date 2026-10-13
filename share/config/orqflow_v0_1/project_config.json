@@ -1,6 +1,12 @@
 {
   "process_config": {
     "Process_ID": "12",
+    "processor_mapping": {
+      "Fiserv": 14,
+      "Chase": 13,
+      "Discover": 16,
+      "American Express": 15
+    },
     "object_repo_path": "../../../apps/demo/shared/object_repo",
     "init_module": "../../../apps/demo/automations/case_processing/init.py",
     "process_module": "../../../apps/demo/automations/case_processing/process.py",

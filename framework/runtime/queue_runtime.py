@@ -520,6 +520,33 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         logger.info("Input Case_Json construction completed before mandatory-field validation")
         logger.debug("Case_Json preparation details: row_count=%s", len(dataframe))
 
+    processor_errors: list[str | None] = [None] * len(dataframe)
+    raw_mapping = state.get("config", {}).get("process_config", {}).get("processor_mapping")
+    if raw_mapping is not None:
+        import pandas as pd
+
+        mapping = _normalized_processor_mapping(raw_mapping)
+        dataframe = dataframe.copy()
+        processor_values = []
+        for position, (_, row) in enumerate(dataframe.iterrows()):
+            original = _normalize_db_value(row.get("Processor"))
+            key = _processor_mapping_key(original)
+            if not key:
+                processor_errors[position] = "Processor is blank or missing"
+            elif key not in mapping:
+                processor_errors[position] = f"Processor has no configured mapping: {original}"
+            processor_values.append(mapping.get(key))
+        dataframe["Processor"] = pd.Series(processor_values, index=dataframe.index, dtype=object)
+        rejected_count = sum(error is not None for error in processor_errors)
+        logger.info(
+            "Input Processor mapping completed: row_count=%s, mapped_count=%s, rejected_count=%s",
+            len(dataframe),
+            len(dataframe) - rejected_count,
+            rejected_count,
+        )
+    else:
+        logger.debug("Input Processor mapping skipped: process_config.processor_mapping is not configured")
+
     required_fields = _required_input_fields(db_schema)
     logger.debug("Mandatory tbl_input fields: %s", ", ".join(sorted(required_fields)))
     missing_columns = required_fields.difference(dataframe.columns)
@@ -562,8 +589,24 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         "skipped_rows": [],
         "failed_rows": [],
     }
-    for row_index, row in dataframe.iterrows():
+    for position, (row_index, row) in enumerate(dataframe.iterrows()):
         excel_row_number = int(row_index) + 2
+        processor_error = processor_errors[position]
+        if processor_error is not None:
+            summary["failed_rows"].append({"row": excel_row_number, "error": processor_error})
+            summary["failed_count"] += 1
+            logger.warning(
+                "Input row rejected during Processor mapping: row=%s, error=%s",
+                excel_row_number,
+                processor_error,
+            )
+            continue
+        if raw_mapping is not None:
+            logger.debug(
+                "Input Processor mapped: row=%s, processor_id=%s",
+                excel_row_number,
+                row["Processor"],
+            )
         row_error = _validate_required_row_values(row, required_fields)
         if row_error is not None:
             summary["failed_rows"].append({"row": excel_row_number, "error": row_error})
@@ -614,6 +657,24 @@ def _insert_input_dataframe(state: OrqflowState, dataframe: Any) -> dict[str, An
         summary["inserted_input_ids"].append(inserted_id)
 
     return summary
+
+
+def _processor_mapping_key(value: Any) -> str:
+    return "" if value is None else "".join(str(value).split()).casefold()
+
+
+def _normalized_processor_mapping(raw_mapping: Any) -> dict[str, int]:
+    if not isinstance(raw_mapping, dict) or not raw_mapping:
+        raise ValueError("process_config.processor_mapping must be a non-empty object")
+    mapping: dict[str, int] = {}
+    for name, processor_id in raw_mapping.items():
+        key = _processor_mapping_key(name)
+        if not key or isinstance(processor_id, bool) or not isinstance(processor_id, int):
+            raise ValueError("processor_mapping must map non-blank names to integer values")
+        if key in mapping:
+            raise ValueError(f"processor_mapping has duplicate normalized name: {name}")
+        mapping[key] = processor_id
+    return mapping
 
 
 def _is_duplicate_input_error(error: Exception, db_type: str) -> bool:

@@ -1363,3 +1363,21 @@ Deployment status:
 - Rebuilt `dist/framework-0.1.12-py3-none-any.whl` with `python -m build --wheel --no-isolation`. Verified all 18 packaged Python source files byte-for-byte against the workspace and confirmed wheel metadata version `0.1.12`.
 - Rebuilt artifact SHA-256: `62AA954E90B787623E15C2E5A4F8D220AA959A0F750B248D5524F91D7A2BDBED`.
 - The wheel remains a local artifact under ignored `dist/`; it has not been installed into the consuming project. Source, regression tests, and documentation are prepared for commit and synchronization with `origin/master`.
+
+## 2026-10-13 Processor Mapping and Logs
+
+- After Case_Json construction, map the separate input DataFrame Processor column using process_config.processor_mapping in project_config.json. Both supplied project configs include Fiserv=14, Chase=13, Discover=16, and American Express=15.
+- Matching ignores case and all whitespace in source names and config keys. Blank, missing, and unmapped values reject only the affected row, increment input_load_summary.failed_count, and record the row number and reason in failed_rows. Valid rows continue. Numeric source IDs require an explicit matching config key.
+- Configured mappings must be non-empty objects with non-blank names, integer values, and unique normalized names. Omitting the mapping preserves legacy Processor handling.
+- Mapping logs total/mapped/rejected counts at INFO, successful row numbers and processor IDs at DEBUG, and rejected row numbers and reasons at WARNING. Unmapped rejection messages include the original Processor value; unrelated input values and JSON payloads are omitted. An absent mapping is logged at DEBUG.
+- Documentation updated in docs/excel_master_queue_plan.md and docs/sqlite_queue_backend_plan.md. The existing wheel predates this source change; no rebuild or deployment was performed.
+- Verification: .venv/Scripts/python.exe -m unittest tests.test_excel_master_queue tests.test_mysql_queue tests.test_safe_logging passed all 55 tests, including SQLite integration, MySQL connector API mocks, and logging checks. A live MySQL run remains unverified.
+
+## 2026-10-13 Version 0.1.13 Build
+
+- Bumped pyproject.toml from 0.1.12 to 0.1.13 for configurable Processor mapping and its logs.
+- Built dist/framework-0.1.13-py3-none-any.whl using .venv/Scripts/python.exe -m build --wheel --no-isolation. Build output is saved in logs/wheel-build.log.
+- Full source suite passed: 103 tests using .venv/Scripts/python.exe -m unittest discover -s tests. Output is saved in logs/release-validation.log. MySQL coverage uses connector API mocks; no live database was verified.
+- Verified wheel metadata version 0.1.13, the complete set of 18 framework Python files, and byte-for-byte equality with workspace source.
+- Artifact SHA-256: f9f8a6122ba02d2edf67561d0e3667b2453f2ba388abec165d94610fd12826f6.
+- Project configs remain external to the wheel. The consuming project must include process_config.processor_mapping to enable mapping. This build has not been installed or deployed.
