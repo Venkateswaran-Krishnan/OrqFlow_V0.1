@@ -17,13 +17,16 @@ Review notes, open gaps, risks, and production-hardening questions.
 `docs/codex-hadoff.md`  
 Cross-machine project memory for decisions, cleanup notes, and current direction.
 
+`docs/database_connections.md`
+Connection validation/recovery policy, custom project integration example, operational logging levels, source verification logs, and deployment status.
+
 ## Framework Entry
 
 `framework/__main__.py`  
-Runs when calling `python -m framework`. Forwards execution to `framework.cli.main()`.
+Runs when calling `python -m framework`. Exits with the status returned by `framework.cli.main()`.
 
 `framework/cli.py`  
-Reads the optional config/bootstrap path argument and calls `run_graph(...)`.
+Reads the optional config/bootstrap path argument and calls `run_graph(...)`. Returns exit code 1 for a terminal `SYSTEM_EXCEPTION`, otherwise 0.
 
 `framework/__init__.py`  
 Package exports. Makes `build_graph` and `run_graph` importable from `framework`.
@@ -52,8 +55,11 @@ Configures logging, rotating file logs, console output, and trace events.
 
 ## Runtime
 
+`framework/runtime/database_connection.py`
+Shared database validation for framework and project adapters. MySQL validates first and reconnects with three attempts and a two-second delay only outside active transactions. SQLite validates the existing handle without reopening a closed connection. SQL statements and commits are never automatically replayed. The `framework.runtime.database` logger records validation, reconnect attempts, recovery, and failures without credentials or payloads.
+
 `framework/runtime/queue_db.py`
-Initializes SQLite/MySQL adapters, loads named SQL blocks, and provides `execute_queue_query()`. MySQL uses buffered dictionary cursors; SQLite uses named rows. The execution context closes cursors on success and failure, while the queue runtime controls commits and rollbacks.
+Initializes and validates SQLite/MySQL adapters, loads named SQL blocks, and provides `execute_queue_query()`. Every query validates the connection before opening its cursor. MySQL uses buffered dictionary cursors; SQLite uses named rows. The execution context closes cursors on success and failure, while the queue runtime controls commits and rollbacks.
 
 `framework/runtime/framework_lifecycle.py`  
 Framework startup behavior. Loads `KeySteps.xlsx`, initializes the configured queue database adapter, and invokes an optional `FRAMEWORK_INIT` KeySteps hook. Initialization failures set `SYSTEM_EXCEPTION` and route safely to `END`.
@@ -99,8 +105,11 @@ Repo-local shared config model, including global config, project config, app mod
 
 ## Tests
 
+`tests/test_database_connection.py`
+Covers missing-handle connection and validation, explicit adapter failures, local SQLite transaction preservation, CLI failure exit status, and safe success/failure reconnect events.
+
 `tests/test_mysql_queue.py`
-Covers queue operations against mocks constrained to the MySQL connector API: application validation, schema reads, input insertion, queue creation, duplicate skips, rollback, transaction fetching, eligibility checks, final statuses, and cursor cleanup. Does not connect to a live MySQL server.
+Covers queue operations against mocks constrained to the MySQL connector API: application validation, schema reads, input insertion, queue creation, duplicate skips, rollback, transaction fetching, eligibility checks, final statuses, and cursor cleanup. Also covers disconnection during input collection, failed recovery before SQL, active-transaction protection, and completion of read transactions before the next validation. Does not connect to a live MySQL server.
 
 `tests/test_excel_master_queue.py`
 Covers input loading, queue creation, SQLite/MySQL duplicate-input recognition, informational skip behavior, database status updates, transaction fetching, and genuine queue failure behavior.

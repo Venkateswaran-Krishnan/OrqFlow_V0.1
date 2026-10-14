@@ -1403,3 +1403,49 @@ Deployment status:
 - Fetched `origin`; local `master` matched `origin/master` before preparing the release commit. Release source, tests, and documentation are being committed and pushed to `origin/master`; the final response reports the confirmed synchronization result.
 - The wheel and validation logs remain local ignored artifacts. The pre-existing untracked `share/config/OrqFlow_Wheel_Test/` directory is excluded from the release commit.
 - This build supersedes the earlier note that no rebuilt wheel exists. It has not been installed into `OTS_RTB_Extraction`. Deploy the updated framework package together with both external queue query files; shared SQL is not packaged in the wheel.
+
+## 2026-10-13 Shared Database Connection Recovery and Logs
+
+Problem and scope:
+
+- A healthy shared database can coexist with a stale individual automation connection after hours of external API work. Other automations succeeding does not establish this worker's connection health; the exact cause of the reported disconnect remains unverified.
+- The requested fix covers every database access path in this repository, rather than only master queue creation. All framework queries currently pass through `execute_queue_query()`; custom project-owned connections must adopt the shared guard explicitly.
+
+Source changes:
+
+- Added `framework/runtime/database_connection.py` with reusable `ensure_database_connection()`. Adapters provide `db_type`, `connection`, and `connect()`; missing handles connect before validation.
+- Startup and every framework query use the guard before opening a cursor. MySQL checks using `ping(reconnect=False)` and, if unavailable outside a transaction, uses `ping(reconnect=True, attempts=3, delay=2)`.
+- The guard reads cached transaction status before ping. Active transactions validate without reconnecting and fail on disconnect. SQL and commits are never automatically replayed.
+- SQLite validates with `SELECT 1` and preserves pending transactions; an explicitly closed handle fails without reopening.
+- Eligibility checks, empty transaction fetches, and materialized input selection complete their read transactions before scheduler waits or subsequent queue sets.
+- `framework.cli.main()` returns 1 for terminal `SYSTEM_EXCEPTION`; `python -m framework` passes the returned status to `SystemExit`. Other returned terminal statuses produce 0; unhandled exceptions still propagate.
+
+Runtime logging:
+
+- `framework.runtime.database` records healthy validation at DEBUG, missing-handle establishment and successful reconnection at INFO, reconnection attempts at WARNING, and establishment/validation/reconnection failures or active-transaction reconnect blocks at ERROR.
+- Guard messages omit credentials, connection configuration, SQL, parameters, customer payloads, and raw exception text. Existing caller failure handling remains in place.
+- Reconnection success is logged only after the recovery call succeeds. Regression tests verify recovery/failure messages and sensitive-value exclusion.
+
+Documentation and verification:
+
+- Updated requirements, the project file map, current SQLite/MySQL backend notes, this handoff log, and `docs/database_connections.md` with integration guidance and deployment status.
+- Full source suite: `.venv/Scripts/python.exe -m unittest discover -s tests -q` passed all 120 tests. Results are saved in `logs/database-connection-validation.log` and copied to `logs/source-validation.log`. Expected failure-case tracebacks appear in the test output; the suite ends with `OK`.
+- Tests cover disconnect recovery after input collection, exhausted recovery before SQL, active-transaction protection, read-transaction completion, SQLite transaction preservation, terminal CLI status, and safe connection logs.
+- MySQL tests use connector API mocks; SQLite tests use local databases. No live MySQL recovery was verified.
+
+Release status:
+
+- `pyproject.toml` remains at `0.1.14`. The existing `dist/framework-0.1.14-py3-none-any.whl` predates these connection recovery and logging changes. No version bump, wheel rebuild, installation, deployment, commit, or remote synchronization was performed for this update.
+- Earlier release build/validation logs are retained as historical records. Runtime and validation logs remain ignored local artifacts; the tracked handoff records the current result.
+- The pre-existing untracked `share/config/OrqFlow_Wheel_Test/` directory remains untouched.
+
+## 2026-10-13 Version 0.1.15 Build and Local Commit
+
+- Bumped `pyproject.toml` from `0.1.14` to `0.1.15` for shared connection validation/recovery, safe connection logging, completion of scheduler read transactions, and terminal CLI failure exit codes.
+- Built `dist/framework-0.1.15-py3-none-any.whl` with `.venv/Scripts/python.exe -m build --wheel --no-isolation`. Build output is saved in `logs/wheel-build-0.1.15.log`.
+- Full release suite passed all 120 tests; output is saved in `logs/release-validation-0.1.15.log`. Diff checks passed.
+- Verified wheel CRC, metadata version `0.1.15`, the console-script entry point, and all 19 packaged Python files byte-for-byte against source, including the new shared connection guard.
+- Artifact SHA-256: `22016447bab31fe89dd26fb5e1726f8e85a8d48182e2a7a5d19eb8f79c0b3790`.
+- Updated current release/deployment statements in the requirements, recovery guide, and backend implementation notes. This release supersedes the earlier note that no wheel includes connection recovery.
+- Source, tests, and documentation are prepared for the user-requested local release commit; the final response records the confirmed commit hash. The ignored wheel and log files remain local artifacts. The pre-existing untracked `share/config/OrqFlow_Wheel_Test/` directory is excluded.
+- No installation, deployment, remote push, or live MySQL verification was performed for this release.

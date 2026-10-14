@@ -50,6 +50,8 @@ class DatabaseQueue:
         ) as cursor:
             row = cursor.fetchone()
         if row is None:
+            # End the read transaction before the scheduler can wait for work.
+            self.db.connection.commit()
             logger.debug(
                 "No queue transaction matched fetch statuses: application_id=%s, "
                 "priority_status=%s, fallback_status=%s",
@@ -119,6 +121,7 @@ class DatabaseQueue:
             ],
         ) as cursor:
             has_transaction = cursor.fetchone() is not None
+        self.db.connection.commit()
         logger.debug(
             "Configured queue eligibility checked: priority_status=%s, fallback_status=%s, "
             "has_transaction=%s",
@@ -792,7 +795,10 @@ def _select_eligible_inputs(state: OrqflowState, process_id: str) -> list[Any]:
         db.queries["select_inputs_for_queue_creation"],
         [process_id],
     ) as cursor:
-        return cursor.fetchall()
+        rows = cursor.fetchall()
+    # Materialized inputs need no open read transaction between queue sets.
+    db.connection.commit()
+    return rows
 
 
 def _create_queue_set_for_input(
@@ -873,8 +879,8 @@ def _create_queues_for_eligible_inputs(
 
 def _active_queue_db(state: OrqflowState) -> Any:
     db = state.get("queue_db")
-    if db is None or getattr(db, "connection", None) is None:
-        raise ValueError("state['queue_db'] with an active connection is required")
+    if db is None:
+        raise ValueError("state['queue_db'] is required")
     return db
 
 

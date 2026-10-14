@@ -35,6 +35,8 @@ These items should be resolved before production hardening, because they directl
 
 These risks do not invalidate the design, but they should be controlled during implementation.
 
+Database connection recovery status (2026-10-13): the source now validates startup and every framework query using a shared guard. MySQL recovery is bounded and disabled inside active transactions; completed scheduler read transactions close before waits. Custom project database connections must use the guard explicitly. Connection logging excludes credentials and payloads. The full source suite passed 120 tests using local SQLite databases and MySQL connector API mocks; live MySQL recovery and installation of a newly built package remain deployment checks. See [connection recovery guidance](docs/database_connections.md).
+
 1. **Mutable shared state can become hard to reason about**
    - A single shared state object is appropriate for LangGraph orchestration.
    - Risk: too many services may mutate state directly.

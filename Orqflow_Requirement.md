@@ -439,6 +439,12 @@ Queue database rules:
 - Bind parameters using `?` for SQLite and `%s` for MySQL. Never interpolate input values into SQL text.
 - Close cursors after successful operations and execution failures. Capture insert IDs and affected-row counts before closing the cursor.
 - Keep transaction commits and rollbacks in the queue runtime. A failed queue set shall roll back all queue rows created for that input.
+- Validate connections at startup and before every framework query using `ensure_database_connection()` in `framework/runtime/database_connection.py`. Project-owned database adapters shall use the same guard before their SQL operations.
+- MySQL shall validate using `ping(reconnect=False)` and, on failure outside an active transaction, attempt reconnection using `ping(reconnect=True, attempts=3, delay=2)`. Read the cached transaction flag before validation; never automatically reconnect an active transaction or replay SQL or commits.
+- Complete read transactions after eligibility checks, empty transaction fetches, and materialized input selection so long waits do not leave an active transaction blocking safe reconnection.
+- SQLite shall validate the existing handle using `SELECT 1`; a closed handle shall fail rather than silently reopening and concealing a lost transaction. Missing adapter handles shall be connected before validation.
+
+Framework release `0.1.15` includes shared connection recovery, connection logging, and terminal CLI failure exit codes. Earlier `0.1.14` wheels do not include these changes. See [database connection recovery](docs/database_connections.md) for project integration, logging, verification, and deployment status.
 
 Framework release `0.1.12` fixes MySQL query execution across application validation, schema inspection, input insertion, queue creation, transaction fetching, eligibility checks, and final status updates. SQLite behavior is covered with local database tests; MySQL behavior is covered with connector API mocks. Live MySQL verification remains a deployment check.
 
@@ -828,6 +834,7 @@ The graph shall use `TRANSITION_HUB` as the central post-transaction decision no
 - All errors shall be logged.
 - System exception recovery shall restart through execution initialization, not full framework initialization.
 - Final failure shall record the error reason.
+- The CLI and `python -m framework` shall return exit code `1` when the final runtime status is `SYSTEM_EXCEPTION`, including a failed master queue creation; other returned terminal statuses shall produce exit code `0`. Unhandled exceptions shall continue to propagate.
 
 ## 13. Logging
 
@@ -855,6 +862,8 @@ Logging shall:
 - record handled technical failures at `ERROR`
 - record unexpected raised exceptions with the exception message and traceback
 - record database initialization separately from queue execution: a successful connection does not establish that a later query succeeded
+- record connection checks at `DEBUG`, established/recovered connections at `INFO`, reconnect attempts at `WARNING`, and failed validation/reconnection or active-transaction reconnection blocks at `ERROR` through `framework.runtime.database`
+- connection guard events shall omit credentials, connection configuration, SQL, parameters, customer payloads, and raw exception text
 - keep duplicate input skips at `INFO`; keep genuine database failures at `ERROR` with rollback and traceback details
 - avoid logging document contents and extracted OCR output
 - prevent customer data, parsed case payloads, process results, and OCR values from being interpolated into transaction-fetch or transition-input messages

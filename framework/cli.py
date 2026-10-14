@@ -4,9 +4,10 @@ import argparse
 
 from framework.config import DEFAULT_BOOTSTRAP_PATH
 from framework.graph import run_graph
+from framework.results import Outcome
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Orqflow LangGraph workflow.")
     parser.add_argument(
         "config",
@@ -16,4 +17,5 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    run_graph(args.config)
+    state = run_graph(args.config)
+    return int(state.get("runtime_config", {}).get("last_status") == Outcome.SYSTEM_EXCEPTION)

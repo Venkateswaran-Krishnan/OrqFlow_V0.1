@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 
+from framework.runtime.database_connection import ensure_database_connection
+
 
 class QueueDatabaseError(RuntimeError):
     pass
@@ -34,6 +36,7 @@ def execute_queue_query(
     query: str,
     parameters: list[Any] | tuple[Any, ...] = (),
 ) -> Iterator[Any]:
+    ensure_database_connection(db)
     if db.db_type == "mysql":
         cursor = db.connection.cursor(dictionary=True, buffered=True)
     elif db.db_type == "sqlite":
@@ -133,7 +136,7 @@ def initialize_queue_db_adapter(state: dict[str, Any]) -> QueueDatabaseAdapter:
     else:
         raise QueueDatabaseError(f"Unsupported queue_database.type: {db_type}")
 
-    adapter.connect()
+    ensure_database_connection(adapter)
     return adapter
 
 
